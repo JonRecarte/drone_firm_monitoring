@@ -1,26 +1,26 @@
-"""Genera dashboards/crazyflie_bridge.json.
+"""Generates dashboards/crazyflie_bridge.json.
 
-    python3 build_dashboard.py            # escribe junto a este script
-    python3 build_dashboard.py otra.json  # o en la ruta indicada
+    python3 build_dashboard.py              # writes next to this script
+    python3 build_dashboard.py other.json   # or to the given path
 
-El JSON aprovisionado es el resultado de este script: para añadir un panel
-(p. ej. al ampliar la telemetría del bridge) se edita aquí y se regenera.
-Cambios hechos a mano en la interfaz de Grafana se pierden al regenerar.
+The provisioned JSON is the output of this script: to add a panel (e.g. when
+the bridge telemetry grows) edit it here and regenerate. Changes made by hand
+in the Grafana UI are lost when regenerating.
 """
 import json
 import sys
 from pathlib import Path
 
 DS = {"type": "influxdb", "uid": "influx-drones"}
-# Paleta categórica validada (tema oscuro), en orden fijo: azul, naranja, aqua, amarillo.
+# Validated categorical palette (dark theme), in fixed order: blue, orange, aqua, yellow.
 C = ["#3987e5", "#d95926", "#199e70", "#c98500"]
 MUTED = "#898781"
 
-# dfm etiqueta cada punto con `drone`. Los vuelos anteriores no la llevan y aparecen como SIN.
-SIN = "(sin etiqueta)"
-DRONE = '(if exists r.drone then r.drone else "' + SIN + '")'
+# dfm tags every point with `drone`. Older flights do not have it and show up as UNTAGGED.
+UNTAGGED = "(untagged)"
+DRONE = '(if exists r.drone then r.drone else "' + UNTAGGED + '")'
 DRONE_FILTER = "  |> filter(fn: (r) => contains(value: " + DRONE + ", set: ${drone:json}))\n"
-# `r with`: con un registro de solo `_value` se pierden los puntos sin etiqueta.
+# `r with`: a record with only `_value` drops the untagged points.
 WITH_DRONE = "  |> map(fn: (r) => ({r with drone: " + DRONE + "}))\n"
 
 
@@ -60,7 +60,7 @@ EVENTS_Q = (
     "  |> group()\n"
     '  |> sort(columns: ["_time"])\n'
     '  |> keep(columns: ["_time", "drone", "session", "kind", "_value"])\n'
-    '  |> rename(columns: {_value: "detalle", kind: "evento", session: "sesión", drone: "dron"})'
+    '  |> rename(columns: {_value: "detail", kind: "event"})'
 )
 
 
@@ -87,16 +87,16 @@ def row(title):
 
 def timeseries(title, desc, series, unit, x, w, h=8, decimals=None, threshold_line=None,
                soft_min=None, soft_max=None):
-    """series: lista de (campo, nombre visible, color, estilo)."""
+    """series: list of (field, display name, color, style)."""
     refs = "ABCDEFGH"
     targets, overrides = [], []
     for i, (field, name, color, style) in enumerate(series):
         targets.append({"refId": refs[i], "datasource": DS, "query": series_q(field)})
         if len(series) == 1:
-            # Un solo dato: un color por dron y su nombre en la leyenda.
+            # A single quantity: one color per drone and its name in the legend.
             props = [{"id": "displayName", "value": "${__field.labels.drone}"}]
         else:
-            # Varios datos: los colores de siempre por dato; la leyenda dice de qué dron es.
+            # Several quantities: the usual color per quantity; the legend says which drone it is.
             props = [
                 {"id": "displayName", "value": name + " · ${__field.labels.drone}"},
                 {"id": "color", "value": {"mode": "fixed", "fixedColor": color}},
@@ -154,104 +154,104 @@ def stat(title, desc, field, reducer, unit, x, w, decimals, suffix=None):
     })
 
 
-# ---------------------------------------------------------------- Resumen
-row("Resumen del intervalo")
-stat("Altitud (último valor)", "Última altitud de la planta (GPS de Webots) en el intervalo y sesiones seleccionados.",
+# ---------------------------------------------------------------- Summary
+row("Summary of the time range")
+stat("Altitude (last value)", "Last plant altitude (Webots GPS) in the selected time range and drones.",
      "alt", "last", "suffix: m", 0, 5, 3)
-stat("Error de altura (último)", "alt − consigna. Positivo = por encima de la consigna de session_start.",
+stat("Altitude error (last)", "alt − target. Positive = above the session_start target.",
      "alt_error", "last", "suffix: m", 5, 5, 3)
-stat("Frecuencia media del bucle", "Media de 1/Δt_pared entre ciclos consecutivos del bridge. El bridge pide --loop-hz (12 Hz en run_hover_demo.sh).",
+stat("Mean loop rate", "Mean of 1/Δt_wall between consecutive bridge cycles. The bridge asks for --loop-hz (12 Hz by default in dfm).",
      "loop_hz", "mean", "suffix: Hz", 10, 5, 2)
-stat("Velocidad de simulación media", "Media de Δsim/Δpared: segundos simulados de Webots por segundo real. 1 = tiempo real. No incluye el tiempo virtual de Renode, que el bridge aún no registra.",
+stat("Mean simulation speed", "Mean of Δsim/Δwall: simulated Webots seconds per real second. 1 = real time. It does not include Renode's virtual time, which the bridge does not log yet.",
      "sim_speed", "mean", "none", 15, 5, 2, suffix="×")
-stat("Ciclos en el intervalo", "Número de ciclos de control registrados en el JSONL.",
+stat("Cycles in the range", "Number of control cycles logged in the JSONL.",
      "cycle", "count", "none", 20, 4, 0)
 y += 5
 
-# ---------------------------------------------------------------- Vuelo
-row("Vuelo")
-timeseries("Altitud y consigna",
-           "Altitud de la planta (GPS de Webots) y consigna alt_target de session_start.",
-           [("alt", "Altitud", C[0], "solid"), ("alt_target", "Consigna", MUTED, "dash")],
+# ---------------------------------------------------------------- Flight
+row("Flight")
+timeseries("Altitude and target",
+           "Plant altitude (Webots GPS) and the alt_target set in session_start.",
+           [("alt", "Altitude", C[0], "solid"), ("alt_target", "Target", MUTED, "dash")],
            "suffix: m", 0, 12, decimals=3)
-timeseries("Error de altura",
-           "alt − consigna. Un error estacionario indica sesgo de HOVER_THRUST o saturación del integrador del PD+I del bridge.",
-           [("alt_error", "Error de altura", C[0], "solid")], "suffix: m", 12, 12, decimals=3, threshold_line=0)
+timeseries("Altitude error",
+           "alt − target. A steady error points to a HOVER_THRUST bias or to the integrator of the bridge's PD+I being saturated.",
+           [("alt_error", "Altitude error", C[0], "solid")], "suffix: m", 12, 12, decimals=3, threshold_line=0)
 y += 8
-timeseries("Velocidad vertical",
-           "vz del bridge: Δalt/Δt de PARED (lo que usa su PD+I). vz física: Δalt/Δsim, calculada por el ingestor. Divergen cuando la simulación no va en tiempo real.",
-           [("vz", "vz del bridge (reloj de pared)", C[0], "solid"), ("vz_sim", "vz física (tiempo simulado)", C[1], "solid")],
+timeseries("Vertical speed",
+           "Bridge vz: the Δalt/Δt its PD+I uses, in simulated time with Webots (wall time with FakePlant). Physical vz: Δalt/Δsim, computed by the ingester from the logged samples. With Webots both should match; a gap means the controller and the log see different clocks.",
+           [("vz", "Bridge vz", C[0], "solid"), ("vz_sim", "Physical vz (simulated time)", C[1], "solid")],
            "velocityms", 0, 8, decimals=3)
-timeseries("Empuje comandado",
-           "Thrust de la consigna RPYT que el bridge escribe en el firmware (escala Crazyflie 0–65535).",
-           [("thrust", "Empuje", C[0], "solid")], "none", 8, 8, decimals=0)
-timeseries("Salida del controlador de altura (u)",
-           "Salida adimensional del PD+I de altura del bridge: thrust = HOVER_THRUST + u·14000.",
+timeseries("Commanded thrust",
+           "Thrust of the RPYT setpoint the bridge writes into the firmware (Crazyflie scale 0–65535).",
+           [("thrust", "Thrust", C[0], "solid")], "none", 8, 8, decimals=0)
+timeseries("Altitude controller output (u)",
+           "Dimensionless output of the bridge's altitude PD+I: thrust = HOVER_THRUST + u·14000.",
            [("u", "u", C[0], "solid")], "none", 16, 8, decimals=3)
 y += 8
 
-# ---------------------------------------------------------------- Actuadores
-row("Actuadores · firmware → planta")
-timeseries("Ratios de motor",
-           "motor_ratios del mixer del firmware leídos de Renode (motor_stats), 0–1.",
+# ---------------------------------------------------------------- Actuators
+row("Actuators · firmware → plant")
+timeseries("Motor ratios",
+           "motor_ratios of the firmware mixer, read from Renode (motor_stats), 0–1.",
            [("m1", "M1", C[0], "solid"), ("m2", "M2", C[1], "solid"),
             ("m3", "M3", C[2], "solid"), ("m4", "M4", C[3], "solid")], "percentunit", 0, 8, decimals=1,
            soft_min=0)
-timeseries("Velocidad de hélices ω",
-           "ω aplicada en Webots: ratio × 100 rad/s con los signos de giro de Bitcraze (−, +, −, +).",
+timeseries("Propeller speed ω",
+           "ω applied in Webots: ratio × 100 rad/s with Bitcraze's spin signs (−, +, −, +).",
            [("omega1", "ω1", C[0], "solid"), ("omega2", "ω2", C[1], "solid"),
             ("omega3", "ω3", C[2], "solid"), ("omega4", "ω4", C[3], "solid")], "rotrads", 8, 8, decimals=1)
-timeseries("Dispersión entre motores",
-           "max − min de los cuatro ratios. Cero = empuje simétrico (sin corrección de actitud).",
+timeseries("Motor spread",
+           "max − min of the four ratios. Zero = symmetric thrust (no attitude correction).",
            [("motor_spread", "max − min", C[0], "solid")], "percentunit", 16, 8, decimals=2,
            soft_min=0, soft_max=0.05)
 y += 8
 
-# ---------------------------------------------------------------- Sensores
-row("Sensores · planta → firmware")
-timeseries("Giróscopo",
-           "Velocidad angular enviada al BMI088 emulado, en grados/s, tras el filtro paso bajo del bridge.",
+# ---------------------------------------------------------------- Sensors
+row("Sensors · plant → firmware")
+timeseries("Gyroscope",
+           "Angular rate sent to the emulated BMI088, in degrees/s, after the bridge's low-pass filter.",
            [("gyro_x", "x", C[0], "solid"), ("gyro_y", "y", C[1], "solid"), ("gyro_z", "z", C[2], "solid")],
            "none", 0, 8, decimals=3)
-timeseries("Acelerómetro",
-           "Aceleración propia enviada al BMI088, en mg (1000 = 1 g). El PROTO no tiene acelerómetro: el bridge la deriva del GPS y envía exactamente (0, 0, 1000) cuando el dron está casi quieto.",
+timeseries("Accelerometer",
+           "Proper acceleration sent to the BMI088, in mg (1000 = 1 g). The PROTO has no accelerometer: the bridge derives it from the GPS and sends exactly (0, 0, 1000) when the drone is almost still.",
            [("accel_x", "x", C[0], "solid"), ("accel_y", "y", C[1], "solid"), ("accel_z", "z", C[2], "solid")],
            "none", 8, 8, decimals=1)
-timeseries("Presión barométrica",
-           "Presión enviada al BMP388 emulado, derivada de la altitud de la planta.",
-           [("pressure", "Presión", C[0], "solid")], "suffix: Pa", 16, 8, decimals=1)
+timeseries("Barometric pressure",
+           "Pressure sent to the emulated BMP388, derived from the plant altitude.",
+           [("pressure", "Pressure", C[0], "solid")], "suffix: Pa", 16, 8, decimals=1)
 y += 8
 
-# ---------------------------------------------------------------- Fidelidad
-row("Fidelidad de la co-simulación")
-timeseries("Frecuencia del bucle del bridge",
-           "1/Δt de pared entre ciclos consecutivos. Calculada por el ingestor. Cada consulta extra al monitor de Renode alarga el ciclo (p. ej. la línea de estado del bridge cada --status-every s).",
-           [("loop_hz", "Frecuencia", C[0], "solid")], "suffix: Hz", 0, 8, decimals=2)
-timeseries("Velocidad de simulación",
-           "Δsim/Δpared entre ciclos. La línea gris marca 1 (tiempo real). Calculada por el ingestor; no incluye el tiempo virtual de Renode.",
-           [("sim_speed", "Δsim/Δpared", C[0], "solid")], "none", 8, 8, decimals=3, threshold_line=1)
-timeseries("Avance de simulación por ciclo",
-           "Segundos simulados de Webots entre ciclos. El catch-up del bridge limita el avance a ~0,25 s por ciclo.",
-           [("dt_sim", "Δsim por ciclo", C[0], "solid")], "s", 16, 8, decimals=3)
+# ---------------------------------------------------------------- Fidelity
+row("Co-simulation fidelity")
+timeseries("Bridge loop rate",
+           "1/Δt of wall time between consecutive cycles. Computed by the ingester. Every extra query to the Renode monitor makes the cycle longer (e.g. the bridge's status line every --status-every s).",
+           [("loop_hz", "Rate", C[0], "solid")], "suffix: Hz", 0, 8, decimals=2)
+timeseries("Simulation speed",
+           "Δsim/Δwall between cycles. The grey line marks 1 (real time). Computed by the ingester; it does not include Renode's virtual time.",
+           [("sim_speed", "Δsim/Δwall", C[0], "solid")], "none", 8, 8, decimals=3, threshold_line=1)
+timeseries("Simulation advance per cycle",
+           "Simulated Webots seconds between cycles. The bridge's catch-up limits the advance to ~0.25 s per cycle.",
+           [("dt_sim", "Δsim per cycle", C[0], "solid")], "s", 16, 8, decimals=3)
 y += 8
 
-# ---------------------------------------------------------------- Eventos
-row("Eventos de sesión")
+# ---------------------------------------------------------------- Events
+row("Session events")
 panels.append({
     "type": "table", "id": next(_ids), "title": "session_start / session_end",
-    "description": "Eventos del JSONL con sus parámetros tal como los escribe el bridge.",
+    "description": "Events from the JSONL with their parameters, as the bridge writes them.",
     "datasource": DS, "gridPos": {"h": 7, "w": 24, "x": 0, "y": y},
     "targets": [{"refId": "A", "datasource": DS, "query": EVENTS_Q}],
     "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
                     "overrides": [{"matcher": {"id": "byName", "options": "_time"},
-                                   "properties": [{"id": "displayName", "value": "Hora"}]}]},
+                                   "properties": [{"id": "displayName", "value": "Time"}]}]},
     "options": {"showHeader": True, "cellHeight": "sm", "footer": {"show": False}},
 })
 
 dashboard = {
     "uid": "crazyflie-bridge",
-    "title": "Crazyflie · bridge Webots↔Renode",
-    "description": "Telemetría JSONL del bridge de CF_renode_emulator ingerida con bridge_to_influx.py",
+    "title": "Crazyflie · Webots↔Renode bridge",
+    "description": "JSONL telemetry of the drone_firm_monitoring bridge, ingested with bridge_to_influx.py",
     "tags": ["drones", "crazyflie", "bridge"],
     "timezone": "browser",
     "editable": True,
@@ -269,7 +269,7 @@ dashboard = {
         "enable": True, "hide": True, "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Annotations & Alerts", "type": "dashboard"}]},
     "templating": {"list": [{
-        "name": "drone", "label": "Dron", "type": "query", "datasource": DS,
+        "name": "drone", "label": "Drone", "type": "query", "datasource": DS,
         "query": DRONE_VAR_Q, "definition": DRONE_VAR_Q,
         "refresh": 2, "sort": 1, "multi": True, "includeAll": True,
         "current": {"selected": True, "text": ["All"], "value": ["$__all"]},
@@ -282,4 +282,4 @@ out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).with_name("dash
 with open(out, "w", encoding="utf-8", newline="\n") as fh:
     json.dump(dashboard, fh, ensure_ascii=False, indent=2)
     fh.write("\n")
-print(f"{len(panels)} paneles -> {out}")
+print(f"{len(panels)} panels -> {out}")

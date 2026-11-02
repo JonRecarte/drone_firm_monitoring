@@ -64,6 +64,8 @@ DEFAULTS: dict = {
         "loop_hz": 12,
         "duration_s": 300,
         "gate_timeout_s": 600,
+        # Altitude PD+I, in simulated time (see engine/bridge/webots_renode_bridge.py).
+        "alt_kp": 0.40, "alt_kd": 0.341, "alt_ki": 0.129, "alt_i_limit": 0.31, "alt_vz_limit": 8.06,
     },
     "monitoring": {"enabled": True},
 }
@@ -256,7 +258,8 @@ def bridge_args(cfg: dict, d: Drone) -> list[str]:
         "--telemetry", str(d.jsonl),
         "--thrust", str(b["thrust"]), "--hover-thrust", str(b["hover_thrust"]),
         "--roll", "0", "--pitch", "0", "--yaw-rate", "0", "--alt-target", str(b["alt_target"]),
-        "--alt-kp", "0.40", "--alt-kd", "1.10", "--alt-ki", "0.04", "--alt-hold",
+        "--alt-kp", str(b["alt_kp"]), "--alt-kd", str(b["alt_kd"]), "--alt-ki", str(b["alt_ki"]),
+        "--alt-i-limit", str(b["alt_i_limit"]), "--alt-vz-limit", str(b["alt_vz_limit"]), "--alt-hold",
     ]
 
 

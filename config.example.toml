@@ -22,6 +22,12 @@ imu_hz = 80
 loop_hz = 12
 duration_s = 300          # flight seconds for each bridge
 gate_timeout_s = 600      # how long to wait for the firmware to boot (minutes in Renode)
+# Altitude controller (PD+I in simulated time; see "Known limitations" in README.md):
+# alt_kp = 0.40
+# alt_kd = 0.341
+# alt_ki = 0.129
+# alt_i_limit = 0.31
+# alt_vz_limit = 8.06
 
 [monitoring]
 enabled = true            # InfluxDB + Grafana (monitoring/) and one ingester per drone

@@ -1,6 +1,6 @@
-"""Pruebas del ingestor. No necesitan InfluxDB ni el bridge.
+"""Tests for the ingester. They need neither InfluxDB nor the bridge.
 
-    python3 -m unittest discover -s tests -v      (desde drone-monitoring/)
+    python3 -m unittest discover -s tests -v      (from monitoring/)
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import bridge_to_influx as b2i  # noqa: E402
 
-EXAMPLE = HERE / "datos" / "cf_bridge_smoke_jsonl_example.txt"
+EXAMPLE = HERE / "data" / "cf_bridge_smoke_jsonl_example.txt"
 
 
 def cycle(t, sim, alt, motors=(0.55, 0.55, 0.55, 0.55), **extra):
@@ -35,7 +35,7 @@ def start(t, alt_target=0.5):
 
 
 def _split_fields(s):
-    """Parte el bloque de campos por comas que no estén dentro de un string."""
+    """Splits the field block on commas that are not inside a string."""
     parts, cur, quoted, esc = [], "", False, False
     for ch in s:
         if esc:
@@ -54,7 +54,7 @@ def _split_fields(s):
 
 
 def parse_line(line):
-    """Descompone una línea (sin espacios en tags ni en strings): (medida, tags, campos, ts)."""
+    """Splits a line (no spaces in tags or strings): (measurement, tags, fields, ts)."""
     head, rest = line.split(" ", 1)
     fields, ts = rest.rsplit(" ", 1)
     meas, *tag_parts = head.split(",")
@@ -74,10 +74,10 @@ def parse_line(line):
 class LineProtocolTest(unittest.TestCase):
     def test_escapes_tags_and_fields(self):
         line = b2i.to_line("bridge cycle", {"host": "lab 1,a=b"},
-                           {"msg": 'dice "hola"\nadiós', "x": 1.5, "ok": True}, 7)
+                           {"msg": 'says "hello"\ncafé', "x": 1.5, "ok": True}, 7)
         self.assertEqual(
             line,
-            'bridge\\ cycle,host=lab\\ 1\\,a\\=b msg="dice \\"hola\\"\\nadiós",ok=true,x=1.5 7',
+            'bridge\\ cycle,host=lab\\ 1\\,a\\=b msg="says \\"hello\\"\\ncafé",ok=true,x=1.5 7',
         )
 
     def test_numbers_are_floats_and_empty_tags_dropped(self):
@@ -166,7 +166,7 @@ class ConverterTest(unittest.TestCase):
     def test_invalid_timestamp_is_counted(self):
         conv = b2i.Converter()
         self.assertEqual(conv.feed({"alt": 1.0}), [])
-        self.assertEqual(conv.feed({"t_wall": "ayer", "alt": 1.0}), [])
+        self.assertEqual(conv.feed({"t_wall": "yesterday", "alt": 1.0}), [])
         self.assertEqual(conv.stats.invalid, 2)
 
 
@@ -207,9 +207,9 @@ class ReadLinesTest(unittest.TestCase):
         self.assertEqual(list(b2i.read_lines(self.path, follow=False)), ['{"a": 1}', '{"a": 2}'])
 
 
-@unittest.skipUnless(EXAMPLE.is_file(), f"no está {EXAMPLE}")
+@unittest.skipUnless(EXAMPLE.is_file(), f"{EXAMPLE} is missing")
 class ExampleLogTest(unittest.TestCase):
-    """El log de ejemplo de Dani: 57 ciclos y dos eventos."""
+    """Dani's example log: 57 cycles and two events."""
 
     @classmethod
     def setUpClass(cls):

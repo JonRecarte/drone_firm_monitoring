@@ -1,3 +1,5 @@
 config.toml
 runs/
 __pycache__/
+# Webots writes these next to the world when it opens it
+*.wbproj

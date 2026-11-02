@@ -84,7 +84,7 @@ plus the configuration and versions used.
 ## Watch in Grafana
 
 Open <http://localhost:3000> (user `admin`, password `admin`) and the dashboard
-**Crazyflie · bridge Webots↔Renode**. Use the **Drone** selector to show one, several or
+**Crazyflie · Webots↔Renode bridge**. Use the **Drone** selector to show one, several or
 all drones.
 
 ## Commands
@@ -127,9 +127,14 @@ The main settings:
 
 ## Known limitations
 
-- Webots, Renode and the bridges are not run in lockstep, and the bridge's altitude
-  controller uses wall-clock time. Take-off can overshoot, and flights depend on how fast
-  the machine is. A fix is being worked on.
+- Webots and Renode are not run in lockstep. The bridge's altitude controller already
+  works in simulated time, but how much firmware time passes on each control cycle still
+  depends on how fast the machine is (6–28 ms of firmware time for 256 ms of physics on
+  our test machine). The firmware then answers the setpoint one or more cycles late, so
+  take-off can overshoot by several metres before the drone settles at its altitude. A
+  lockstep mode is being designed.
+- With the default gains the drone settles about 0.1 m above the target (0.60 m for
+  0.5 m): the integrator reaches its limit before it can remove the error.
 - Emulation is functionally faithful (memory, peripherals, boot, arming), not
   cycle-accurate.
 

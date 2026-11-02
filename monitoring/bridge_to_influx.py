@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
-"""Ingesta de la telemetría JSONL del bridge Webots<->Renode en InfluxDB 2.x.
+"""Ingests the JSONL telemetry of the Webots<->Renode bridge into InfluxDB 2.x.
 
-El bridge de CF_renode_emulator escribe un objeto JSON por ciclo de control
-cuando se lanza con --telemetry (o TELEMETRY=... en run_hover_demo.sh). Este
-script lee ese fichero —completo, o siguiéndolo en vivo como `tail -F`— y lo
-convierte en puntos de InfluxDB. No toca el bridge ni el monitor de Renode, que
-solo admite un cliente y ya lo ocupa el bridge.
+When launched with --telemetry, the bridge writes one JSON object per control
+cycle. This script reads that file —whole, or following it live like `tail -F`—
+and turns it into InfluxDB points. It never touches the bridge or the Renode
+monitor, which accepts a single client and is already taken by the bridge.
 
-El JSONL sigue siendo el registro primario. Cada punto lleva el `t_wall`
-original como timestamp, así que volver a ingerir el mismo fichero reescribe
-exactamente los mismos puntos: la ingesta es idempotente y sirve para rellenar
-huecos si InfluxDB estuvo caído.
+The JSONL stays the primary record. Every point carries the original `t_wall`
+as its timestamp, so ingesting the same file again rewrites exactly the same
+points: ingestion is idempotent and can fill gaps if InfluxDB was down.
 
-Medidas que escribe:
-  bridge_cycle  un punto por ciclo de control; campos crudos + derivados
-  bridge_event  session_start, session_end y cualquier otro `kind`
+Measurements it writes:
+  bridge_cycle  one point per control cycle; raw + derived fields
+  bridge_event  session_start, session_end and any other `kind`
 
-Solo usa la biblioteca estándar, para correr con el python3 del host del bridge.
+Standard library only, so it runs with the python3 of the bridge host.
 
-Uso:
-  python3 bridge_to_influx.py --file /tmp/cf_bridge.jsonl            # reproducir
-  python3 bridge_to_influx.py --file /tmp/cf_bridge.jsonl --follow   # en vivo
-  python3 bridge_to_influx.py --file ejemplo.jsonl --stdout          # ver line protocol
+Usage:
+  python3 bridge_to_influx.py --file /tmp/cf_bridge.jsonl            # replay
+  python3 bridge_to_influx.py --file /tmp/cf_bridge.jsonl --follow   # live
+  python3 bridge_to_influx.py --file example.jsonl --stdout          # show line protocol
 """
 from __future__ import annotations
 
@@ -41,14 +39,14 @@ from typing import Any, Iterator
 MEAS_CYCLE = "bridge_cycle"
 MEAS_EVENT = "bridge_event"
 
-# Destino por defecto: el InfluxDB de docker-compose.yml con sus credenciales fijas.
+# Default target: the InfluxDB of docker-compose.yml with its fixed credentials.
 DEFAULT_URL = "http://localhost:8086"
 DEFAULT_ORG = "drones"
 DEFAULT_BUCKET = "bridge"
 DEFAULT_TOKEN = "drones-token"
 
-# Vectores de bridge/telemetry.py -> nombres de campo legibles en InfluxDB.
-# Un vector desconocido se aplana como <clave>_1, <clave>_2, ...
+# Vectors of bridge/telemetry.py -> readable field names in InfluxDB.
+# An unknown vector is flattened as <key>_1, <key>_2, ...
 VECTOR_NAMES = {
     "motors": ("m1", "m2", "m3", "m4"),
     "omega": ("omega1", "omega2", "omega3", "omega4"),
@@ -58,9 +56,9 @@ VECTOR_NAMES = {
 ENVELOPE = ("t_wall", "kind")
 RESERVED_TAGS = ("session", "kind", "mode")
 
-# Marcadores que genera read_lines() además de las líneas.
-IDLE = object()   # no hay datos nuevos (modo --follow): momento de vaciar el lote
-RESET = object()  # el fichero se truncó o se sustituyó: empieza otra historia
+# Markers that read_lines() yields besides the lines.
+IDLE = object()   # no new data (--follow mode): time to flush the batch
+RESET = object()  # the file was truncated or replaced: a new history begins
 
 
 def log(msg: str) -> None:
@@ -82,13 +80,13 @@ def esc_measurement(s: str) -> str:
 
 
 def esc_key(s: str) -> str:
-    """Escapa claves de tag, valores de tag y claves de campo."""
+    """Escapes tag keys, tag values and field keys."""
     return _esc(s, ",= ")
 
 
 def fmt_field(v: Any) -> str:
-    # Todos los números se escriben como float: si un campo llegara una vez como
-    # entero y otra como float, InfluxDB rechazaría el punto por conflicto de tipo.
+    # Every number is written as a float: if a field arrived once as an integer
+    # and once as a float, InfluxDB would reject the point for a type conflict.
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, float):
@@ -114,7 +112,7 @@ def ns(t_wall: float) -> int:
 
 
 # --------------------------------------------------------------------------
-# Conversión JSONL -> puntos
+# JSONL -> points
 
 @dataclass
 class Stats:
@@ -129,10 +127,10 @@ class Stats:
 
     def summary(self) -> str:
         return (
-            f"líneas={self.lines} ciclos={self.cycles} eventos={self.events} "
-            f"sesiones={self.sessions} inválidas={self.invalid} "
-            f"valores_no_finitos={self.non_finite} puntos_enviados={self.points_sent} "
-            f"lotes_rechazados={self.rejected_batches}"
+            f"lines={self.lines} cycles={self.cycles} events={self.events} "
+            f"sessions={self.sessions} invalid={self.invalid} "
+            f"non_finite_values={self.non_finite} points_sent={self.points_sent} "
+            f"rejected_batches={self.rejected_batches}"
         )
 
 
@@ -150,7 +148,7 @@ def _put(out: dict[str, Any], key: str, v: Any, stats: Stats | None) -> None:
         if math.isfinite(f):
             out[key] = f
         elif stats is not None:
-            # NaN/inf no caben en line protocol. Se cuentan: en el bridge son una anomalía.
+            # NaN/inf do not fit in line protocol. They are counted: in the bridge they are an anomaly.
             stats.non_finite += 1
     elif isinstance(v, list):
         names = VECTOR_NAMES.get(key, ())
@@ -162,7 +160,7 @@ def _put(out: dict[str, Any], key: str, v: Any, stats: Stats | None) -> None:
 
 
 def flatten(obj: dict[str, Any], stats: Stats | None = None) -> dict[str, Any]:
-    """Aplana un objeto del JSONL a campos escalares, sin el sobre (t_wall, kind)."""
+    """Flattens a JSONL object into scalar fields, without the envelope (t_wall, kind)."""
     out: dict[str, Any] = {}
     for k, v in obj.items():
         if k not in ENVELOPE:
@@ -186,11 +184,11 @@ class _Session:
 
 
 class Converter:
-    """Convierte objetos del JSONL en líneas de InfluxDB, sesión a sesión.
+    """Turns JSONL objects into InfluxDB lines, session by session.
 
-    TelemetryWriter abre el fichero en modo append, así que un mismo JSONL puede
-    contener varias sesiones seguidas. Cada session_start abre una sesión nueva
-    (tag `session`) y reinicia las derivadas que dependen del ciclo anterior.
+    TelemetryWriter opens the file in append mode, so one JSONL can hold
+    several sessions in a row. Each session_start opens a new session
+    (tag `session`) and resets the derived fields that depend on the previous cycle.
     """
 
     def __init__(self, static_tags: dict[str, str] | None = None, stats: Stats | None = None):
@@ -237,7 +235,7 @@ class Converter:
         sim = fields.get("sim") if _is_num(fields.get("sim")) else None
         s.n += 1
 
-        # Derivadas. Nunca sustituyen un campo que ya traiga el bridge.
+        # Derived fields. They never replace a field the bridge already sends.
         derived: dict[str, float] = {"cycle": float(s.n)}
         if s.alt_target is not None:
             derived["alt_target"] = s.alt_target
@@ -252,7 +250,7 @@ class Converter:
             if dt_wall > 0:
                 derived["dt_wall"] = dt_wall
                 derived["loop_hz"] = 1.0 / dt_wall
-            # Con FakePlant el tiempo de Webots se queda en 0: no hay reloj simulado.
+            # With FakePlant the Webots time stays at 0: there is no simulated clock.
             if sim is not None and s.prev_sim is not None and (sim > 0 or s.prev_sim > 0):
                 dt_sim = sim - s.prev_sim
                 derived["dt_sim"] = dt_sim
@@ -260,7 +258,7 @@ class Converter:
                     if dt_wall > 0:
                         derived["sim_speed"] = dt_sim / dt_wall
                     if alt is not None and s.prev_alt is not None:
-                        # vz física (m por segundo simulado); el `vz` del bridge usa reloj de pared.
+                        # Physical vz (m per simulated second), computed here from the logged samples.
                         derived["vz_sim"] = (alt - s.prev_alt) / dt_sim
         s.prev_t, s.prev_sim, s.prev_alt = t, sim, alt
         for k, v in derived.items():
@@ -274,14 +272,14 @@ class Converter:
 
 
 # --------------------------------------------------------------------------
-# Lectura del fichero
+# Reading the file
 
 def read_lines(path: str, follow: bool, from_end: bool = False, poll: float = 0.5) -> Iterator[Any]:
-    """Genera las líneas completas del JSONL.
+    """Yields the complete lines of the JSONL.
 
-    En modo `follow` genera IDLE cuando no hay datos nuevos y RESET cuando el
-    fichero se trunca o se sustituye por otro. Una línea solo se entrega cuando
-    termina en salto de línea: así nunca se procesa un objeto a medio escribir.
+    In `follow` mode it yields IDLE when there is no new data and RESET when the
+    file is truncated or replaced by another one. A line is only delivered once
+    it ends in a newline, so a half-written object is never processed.
     """
     fh = None
     ino = None
@@ -296,7 +294,7 @@ def read_lines(path: str, follow: bool, from_end: bool = False, poll: float = 0.
                     if not follow:
                         raise
                     if not announced:
-                        log(f"esperando a que aparezca {path} ...")
+                        log(f"waiting for {path} to appear ...")
                         announced = True
                     yield IDLE
                     time.sleep(poll)
@@ -328,7 +326,7 @@ def read_lines(path: str, follow: bool, from_end: bool = False, poll: float = 0.
             try:
                 st = os.stat(path)
             except FileNotFoundError:
-                continue  # borrado: se espera a que el bridge cree otro
+                continue  # deleted: wait for the bridge to create another one
             if st.st_ino != ino or st.st_size < fh.tell():
                 fh.close()
                 fh = None
@@ -339,10 +337,10 @@ def read_lines(path: str, follow: bool, from_end: bool = False, poll: float = 0.
 
 
 # --------------------------------------------------------------------------
-# Destinos
+# Sinks
 
 class InfluxFatal(Exception):
-    """Error que no se arregla reintentando: credenciales, org o bucket."""
+    """An error that retrying will not fix: credentials, org or bucket."""
 
 
 class InfluxWriter:
@@ -354,7 +352,7 @@ class InfluxWriter:
             "Authorization": f"Token {token}",
             "Content-Type": "text/plain; charset=utf-8",
         }
-        self.max_retries = max_retries  # 0 = reintentar indefinidamente (modo --follow)
+        self.max_retries = max_retries  # 0 = retry forever (--follow mode)
         self.timeout = timeout
         self.stats = stats if stats is not None else Stats()
 
@@ -370,24 +368,24 @@ class InfluxWriter:
             except urllib.error.HTTPError as e:
                 detail = e.read()[:500].decode("utf-8", errors="replace")
                 if e.code in (401, 403, 404):
-                    raise InfluxFatal(f"InfluxDB respondió {e.code}: {detail}") from None
+                    raise InfluxFatal(f"InfluxDB answered {e.code}: {detail}") from None
                 if e.code == 413 and len(lines) > 1:
                     half = len(lines) // 2
                     self.write(lines[:half])
                     self.write(lines[half:])
                     return
                 if e.code in (400, 422):
-                    # Puntos mal formados o conflicto de tipos: reintentar no lo arregla.
+                    # Malformed points or a type conflict: retrying will not fix it.
                     self.stats.rejected_batches += 1
-                    log(f"InfluxDB rechazó un lote ({e.code}): {detail}")
+                    log(f"InfluxDB rejected a batch ({e.code}): {detail}")
                     return
                 reason = f"HTTP {e.code}: {detail}"
             except (urllib.error.URLError, OSError) as e:
                 reason = str(getattr(e, "reason", e))
             if self.max_retries and attempt >= self.max_retries:
-                raise ConnectionError(f"InfluxDB no disponible tras {attempt} intentos: {reason}")
+                raise ConnectionError(f"InfluxDB unavailable after {attempt} attempts: {reason}")
             wait = min(30.0, 2.0 ** min(attempt - 1, 5))
-            log(f"InfluxDB no disponible ({reason}); reintento en {wait:.0f} s")
+            log(f"InfluxDB unavailable ({reason}); retrying in {wait:.0f} s")
             time.sleep(wait)
 
 
@@ -406,30 +404,30 @@ def parse_tags(items: list[str]) -> dict[str, str]:
         key, sep, value = item.partition("=")
         key, value = key.strip(), value.strip()
         if not sep or not key or not value:
-            raise SystemExit(f"--tag espera clave=valor, recibido {item!r}")
+            raise SystemExit(f"--tag expects key=value, got {item!r}")
         if key in RESERVED_TAGS:
-            raise SystemExit(f"--tag {key} está reservado (lo asigna el propio ingestor)")
+            raise SystemExit(f"--tag {key} is reserved (the ingester sets it)")
         tags[key] = value
     return tags
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Envía la telemetría JSONL del bridge a InfluxDB 2.x")
-    p.add_argument("-f", "--file", required=True, help="JSONL escrito por el bridge (--telemetry)")
-    p.add_argument("--follow", action="store_true", help="seguir el fichero en vivo, como tail -F")
+    p = argparse.ArgumentParser(description="Sends the bridge's JSONL telemetry to InfluxDB 2.x")
+    p.add_argument("-f", "--file", required=True, help="JSONL written by the bridge (--telemetry)")
+    p.add_argument("--follow", action="store_true", help="follow the file live, like tail -F")
     p.add_argument("--from-end", action="store_true",
-                   help="con --follow, empezar al final (se pierde la sesión en curso)")
-    p.add_argument("--poll", type=float, default=0.5, help="segundos entre lecturas en --follow")
-    p.add_argument("--url", default=None, help=f"URL de InfluxDB (env INFLUX_URL; por defecto {DEFAULT_URL})")
-    p.add_argument("--org", default=None, help=f"organización (env INFLUX_ORG; por defecto {DEFAULT_ORG})")
-    p.add_argument("--bucket", default=None, help=f"bucket (env INFLUX_BUCKET; por defecto {DEFAULT_BUCKET})")
-    p.add_argument("--token", default=None, help="token (env INFLUX_TOKEN; por defecto el de docker-compose.yml)")
+                   help="with --follow, start at the end (the current session is lost)")
+    p.add_argument("--poll", type=float, default=0.5, help="seconds between reads in --follow")
+    p.add_argument("--url", default=None, help=f"InfluxDB URL (env INFLUX_URL; default {DEFAULT_URL})")
+    p.add_argument("--org", default=None, help=f"organization (env INFLUX_ORG; default {DEFAULT_ORG})")
+    p.add_argument("--bucket", default=None, help=f"bucket (env INFLUX_BUCKET; default {DEFAULT_BUCKET})")
+    p.add_argument("--token", default=None, help="token (env INFLUX_TOKEN; default the one in docker-compose.yml)")
     p.add_argument("--tag", action="append", default=[],
-                   help="tag fijo clave=valor para todos los puntos (repetible), p. ej. host=lab")
+                   help="fixed key=value tag for every point (repeatable), e.g. host=lab")
     p.add_argument("--batch-size", type=int, default=5000)
     p.add_argument("--retries", type=int, default=5,
-                   help="reintentos por lote al reproducir un fichero (en --follow, indefinidos)")
-    p.add_argument("--stdout", action="store_true", help="imprimir line protocol en vez de enviarlo")
+                   help="retries per batch when replaying a file (unlimited with --follow)")
+    p.add_argument("--stdout", action="store_true", help="print line protocol instead of sending it")
     return p.parse_args(argv)
 
 
@@ -438,7 +436,7 @@ def _on_sigterm(signum, frame):  # noqa: ARG001
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Una consola que no sepa representar un carácter no debe tumbar la ingesta.
+    # A console that cannot print a character must not bring ingestion down.
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(errors="backslashreplace")
     args = parse_args(argv)
@@ -455,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
         bucket = args.bucket or os.environ.get("INFLUX_BUCKET", DEFAULT_BUCKET)
         sink = InfluxWriter(url, org, bucket, token,
                             max_retries=0 if args.follow else args.retries, stats=stats)
-        log(f"destino {url} org={org} bucket={bucket}")
+        log(f"target {url} org={org} bucket={bucket}")
 
     signal.signal(signal.SIGTERM, _on_sigterm)
     batch: list[str] = []
@@ -475,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
             if item is RESET:
                 flush()
                 conv.reset()
-                log(f"{args.file} se truncó o se sustituyó; se lee desde el principio")
+                log(f"{args.file} was truncated or replaced; reading from the start")
                 continue
             stats.lines += 1
             try:
@@ -490,7 +488,7 @@ def main(argv: list[str] | None = None) -> int:
             batch.extend(conv.feed(obj))
             if stats.sessions != sessions_before:
                 s = conv.session
-                log(f"sesión {s.sid} modo={s.mode} consigna={s.alt_target} m")
+                log(f"session {s.sid} mode={s.mode} target={s.alt_target} m")
             if len(batch) >= args.batch_size:
                 flush()
         flush()
@@ -498,9 +496,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             flush()
         except Exception as e:  # noqa: BLE001
-            log(f"no se pudo vaciar el último lote: {e}")
+            log(f"could not flush the last batch: {e}")
     except FileNotFoundError as e:
-        log(f"no existe {e.filename}")
+        log(f"{e.filename} does not exist")
         code = 4
     except (InfluxFatal, ConnectionError) as e:
         log(str(e))

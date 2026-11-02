@@ -9,7 +9,7 @@ comes from and what was changed, so it can be compared with the original.
 | `examples/protos/` (`Crazyflie.proto` and `meshes/`) | Same repository; official Cyberbotics/Bitcraze model, "licensed for use only with Webots" | commit `fdb018b` |
 | `examples/worlds/` | Based on `webots/worlds/cf_hover.wbt` from the same repository | commit `fdb018b` |
 | `monitoring/` | [drone-monitoring](https://github.com/JonRecarte/drone-monitoring) (Jon, `JonRecarte`) | commit `e8dcd06` |
-| `monitoring/tests/datos/cf_bridge_smoke_jsonl_example.txt` | Example flight log by Dani (2026-10-23) | — |
+| `monitoring/tests/data/cf_bridge_smoke_jsonl_example.txt` | Example flight log by Dani (2026-10-23) | — |
 
 ## Changes from the original
 
@@ -18,17 +18,32 @@ In `engine/` (compared with `CF_renode_emulator@fdb018b`):
 - `scripts/monitor_cf.py`: RAM addresses updated to `crazyflie-firmware@b48aba18`. At run
   time they are replaced by those in the firmware profile (`scripts/firmware_profile.py`).
   Struct offsets are unchanged (checked with `gdb ptype /o`).
-- `bridge/webots_renode_bridge.py`: `--gate-timeout` option (how long to wait for the
-  firmware to boot; default 180 s, as before).
+- `bridge/webots_renode_bridge.py`:
+  - `--gate-timeout` option (how long to wait for the firmware to boot; default 180 s, as
+    before).
+  - The altitude PD+I runs in simulated time (Webots `robot.getTime()`) instead of wall
+    time, so its gains no longer depend on how fast the machine is (agreed with Dani,
+    2026-11-02). The gains were converted so the drone behaves as before on the machine
+    where the original ones were tuned (0.31 simulated seconds per wall second): `kd`
+    1.10 → 0.341, `ki` 0.04 → 0.129, integrator limit 1 → 0.31 m·s, vz clamp
+    2.5 → 8.06 m/s. New options `--alt-i-limit` and `--alt-vz-limit`. The first cycle no
+    longer takes the boot wait as its `dt`, which used to start the integrator saturated.
+    With FakePlant (no Webots clock) the controller still uses wall time, but with the new
+    gains, so FakePlant flights are not comparable with older ones. `dfm` does not use
+    FakePlant.
 - `bridge/webots_io.py`: `unstick_for_takeoff` keeps the drone's own `x, y`. It used to move
   it to `(0, 0)`, which piled up several drones in the same spot.
 
 In `monitoring/` (compared with `drone-monitoring@e8dcd06`):
 
-- `tests/test_bridge_to_influx.py`: the example log is read from `tests/datos/`.
+- Everything translated to English: messages and help of `bridge_to_influx.py` (the
+  summary line now reads `lines=… cycles=… invalid=… non_finite_values=…`), comments,
+  and the dashboard's titles, descriptions and column names. The code, the InfluxDB
+  schema and the dashboard layout are unchanged.
+- `tests/test_bridge_to_influx.py`: the example log is read from `tests/data/`.
 - `grafana/build_dashboard.py`: **Drone** selector (`drone` tag), one line per drone in
-  every chart and one value per drone in the summary; the **Session** selector was
-  removed.
+  every chart and one value per drone in the summary; points without the tag show up as
+  `(untagged)`. The **Session** selector was removed.
 
 ## Not copied
 

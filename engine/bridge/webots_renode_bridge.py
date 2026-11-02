@@ -77,9 +77,15 @@ def parse_args() -> argparse.Namespace:
         default=0.5,
         help="Altitude target (m)",
     )
+    # Altitude PD+I in simulated time (Webots robot.getTime()), so its gains do not depend on
+    # how fast the host is. The defaults reproduce the original wall-clock gains (kp 0.40, kd 1.10, ki 0.04,
+    # integrator ±1, vz clamp ±2.5) as they acted with Webots at 0.31x real time: kd x 0.31,
+    # ki / 0.31, integrator limit x 0.31, vz clamp / 0.31.
     p.add_argument("--alt-kp", type=float, default=0.40, help="Altitude P gain (thrust)")
-    p.add_argument("--alt-kd", type=float, default=1.10, help="Altitude D gain")
-    p.add_argument("--alt-ki", type=float, default=0.04, help="Altitude I gain")
+    p.add_argument("--alt-kd", type=float, default=0.341, help="Altitude D gain, per m/s of simulated vz")
+    p.add_argument("--alt-ki", type=float, default=0.129, help="Altitude I gain, per m·s of simulated time")
+    p.add_argument("--alt-i-limit", type=float, default=0.31, help="Altitude integrator limit (m·s)")
+    p.add_argument("--alt-vz-limit", type=float, default=8.06, help="vz clamp in the D term (m/s)")
     p.add_argument(
         "--hover-thrust",
         type=float,
@@ -178,7 +184,7 @@ def main() -> int:
     period = 1.0 / args.loop_hz if args.loop_hz > 0 else 0.05
     imu_period = 1.0 / min(args.imu_hz, 40.0) if args.imu_hz > 0 else 0.025
     prev_alt = 0.0
-    prev_t = time.time()
+    prev_t: float | None = None
     use_webots = not isinstance(plant, FakePlant)
 
     def _sim_time() -> float:
@@ -186,6 +192,10 @@ def main() -> int:
         if robot is None:
             return 0.0
         return float(robot.getTime())
+
+    def _ctrl_time() -> float:
+        """Clock of the altitude controller: simulated time with Webots, wall time with FakePlant."""
+        return _sim_time() if use_webots else time.time()
 
     def _catch_up(wall_origin: float, sim_origin: float, n_steps: list[int]) -> bool:
         if not use_webots:
@@ -231,10 +241,10 @@ def main() -> int:
     def _host_alt_thrust(alt: float, vz: float, dt: float, prev_thrust: float) -> tuple[float, float]:
         """Commander PD+I on plant altitude -> RPYT thrust. Returns (thrust, u)."""
         err = _clamp(args.alt_target - alt, -1.5, 1.5)
-        vz_c = _clamp(vz, -2.5, 2.5)
+        vz_c = _clamp(vz, -args.alt_vz_limit, args.alt_vz_limit)
         # Freeze integrator while climbing through large positive error after takeoff.
         if alt > 0.15 or abs(err) < 0.8:
-            alt_i[0] = _clamp(alt_i[0] + err * dt, -1.0, 1.0)
+            alt_i[0] = _clamp(alt_i[0] + err * dt, -args.alt_i_limit, args.alt_i_limit)
         u = args.alt_kp * err - args.alt_kd * vz_c + args.alt_ki * alt_i[0]
         bias = args.hover_thrust
         if alt < 0.12:
@@ -339,9 +349,13 @@ def main() -> int:
             now = time.time()
             sample = plant.read_sensors()
             alt = float(getattr(sample, "altitude_m", 0.0))
-            dt = max(1e-3, now - prev_t)
-            vz = (alt - prev_alt) / dt
-            prev_alt, prev_t = alt, now
+            t_ctrl = _ctrl_time()
+            if prev_t is None:
+                dt, vz = period, 0.0
+            else:
+                dt = max(1e-3, t_ctrl - prev_t)
+                vz = (alt - prev_alt) / dt
+            prev_alt, prev_t = alt, t_ctrl
 
             if (now - last_imu) >= imu_period:
                 _push_sensors(renode, sample, zero_gyro=False)

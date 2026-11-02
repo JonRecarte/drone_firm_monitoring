@@ -1,0 +1,62 @@
+# InfluxDB 2 + Grafana para la telemetría del bridge Webots<->Renode.
+#   docker compose up -d
+# Grafana:  http://<host>:3000     usuario admin / admin
+# InfluxDB: http://127.0.0.1:8086  usuario admin / adminadmin · token drones-token
+#
+# Credenciales fijas de laboratorio. Se pueden sustituir con variables de entorno
+# (GRAFANA_ADMIN_PASSWORD, INFLUX_TOKEN, ...), pero solo surten efecto en el primer
+# arranque: InfluxDB y Grafana las guardan al crear sus volúmenes.
+name: drone-monitoring
+
+services:
+  influxdb:
+    image: influxdb:2.7.11
+    container_name: drones-influxdb
+    restart: unless-stopped
+    ports:
+      # Solo escucha en el propio host: el ingestor corre junto al bridge.
+      - "${INFLUX_BIND:-127.0.0.1}:${INFLUX_PORT:-8086}:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_ADMIN_USER:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_ADMIN_PASSWORD:-adminadmin}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-drones}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-bridge}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:-drones-token}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: drones-grafana
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    ports:
+      - "${GRAFANA_BIND:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/crazyflie_bridge.json
+      # Los usa el aprovisionamiento del datasource.
+      INFLUX_ORG: ${INFLUX_ORG:-drones}
+      INFLUX_BUCKET: ${INFLUX_BUCKET:-bridge}
+      INFLUX_TOKEN: ${INFLUX_TOKEN:-drones-token}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+
+volumes:
+  influxdb-data:
+  influxdb-config:
+  grafana-data:

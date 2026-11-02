@@ -1,0 +1,10 @@
+apiVersion: 1
+
+providers:
+  - name: drones
+    folder: Drones
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards

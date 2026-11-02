@@ -1,0 +1,40 @@
+#VRML_SIM R2025a utf8
+# drone_firm_monitoring example world: one drone.
+# Every Crazyflie with controller "<extern>" and supervisor TRUE is an emulated drone:
+# open this world in Webots, press ▶ and run `dfm up`. Names must be unique.
+# Based on webots/worlds/cf_hover.wbt from CF_renode_emulator.
+
+EXTERNPROTO "../protos/Crazyflie.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/Floor.proto"
+
+WorldInfo {
+  title "CF Renode ↔ Webots"
+  basicTimeStep 8
+  info [
+    "Official Crazyflie PROTO; motors driven by Renode cf2.elf via host bridge."
+  ]
+}
+
+Viewpoint {
+  orientation -0.2 0.6 0.77 0.7
+  position -0.8 -0.7 0.6
+  follow "cf1"
+}
+
+TexturedBackground {
+}
+
+TexturedBackgroundLight {
+}
+
+Floor {
+  size 6 6
+}
+Crazyflie {
+  translation 0 0 0.1
+  name "cf1"
+  controller "<extern>"
+  supervisor TRUE
+}

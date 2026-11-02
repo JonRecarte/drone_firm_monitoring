@@ -1,0 +1,27 @@
+# dfm configuration. To change something, copy this file to config.toml (git ignores it)
+# and edit the copy. Anything you leave out takes its default value.
+#
+# Only things Webots does not know about go here. The scene (how many drones, where, what
+# they are called) is defined in your Webots world: dfm connects every drone whose
+# controller is "<extern>".
+
+[renode]
+# Image with Renode, the firmware (2026.08) and its profile. Each drone is one container.
+# By default, the Docker Hub image matching this version of dfm (see `dfm --version`).
+# To use an image you built yourself:
+# image = "drone_firm_monitoring:dev"
+# Drone K uses host port base_port + K (127.0.0.1 only).
+base_port = 10000
+
+[bridge]
+mode = "closed-loop"
+alt_target = 0.5          # m
+thrust = 30500
+hover_thrust = 31000
+imu_hz = 80
+loop_hz = 12
+duration_s = 300          # flight seconds for each bridge
+gate_timeout_s = 600      # how long to wait for the firmware to boot (minutes in Renode)
+
+[monitoring]
+enabled = true            # InfluxDB + Grafana (monitoring/) and one ingester per drone

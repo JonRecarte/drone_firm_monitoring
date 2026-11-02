@@ -1,0 +1,5 @@
+# Only engine/scripts and image/ are needed to build the image.
+*
+!engine/scripts/firmware_profile.py
+!engine/scripts/monitor_cf.py
+!image/entrypoint.py

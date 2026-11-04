@@ -26,8 +26,11 @@ You need these before installing (`dfm` checks them, but does not install them):
 - [Docker Engine](https://docs.docker.com/engine/install/) with the Compose plugin, usable
   **without sudo**. Run `sudo usermod -aG docker $USER`, then log out and back in.
 - Python 3.11 or newer.
-- [Webots R2025a](https://cyberbotics.com), installed and working on the same machine.
-  If you installed it from the tarball, you may also need `sudo apt install libsndio7.0`.
+- [Webots R2025a](https://cyberbotics.com) on the same machine. On Ubuntu, download
+  `webots_2025a_amd64.deb` from the Cyberbotics website and, in the folder where you
+  downloaded it, run `sudo apt install ./webots_2025a_amd64.deb`. The first time Webots
+  starts it opens a demo world; you can close it. If you installed Webots from the
+  tarball instead, you may also need `sudo apt install libsndio7.0`.
 
 Each drone needs about one CPU core and 250 MB of RAM.
 
@@ -36,34 +39,24 @@ Each drone needs about one CPU core and 250 MB of RAM.
 ```bash
 git clone https://github.com/JonRecarte/drone_firm_monitoring.git
 cd drone_firm_monitoring
-./dfm setup     # checks requirements, downloads the images, starts Grafana, puts dfm on your PATH
-dfm check       # tests the installation without Webots (takes a few minutes)
+./dfm setup     # checks requirements, downloads the images, starts Grafana, creates the dfm command
+./dfm check     # tests the installation without Webots (takes a few minutes)
 ```
 
-If `dfm setup` says that `~/.local/bin` is not on your `PATH`, add
-`export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` and open a new terminal. Until
-then, use `./dfm`.
+`dfm setup` creates the `dfm` command in `~/.local/bin`. If it says that this folder is
+not on your `PATH`, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` and open a
+new terminal. From then on you can type `dfm` from any folder; until then, use `./dfm`
+inside this one.
 
-## Connect your world
+## First flight
 
-In Webots, for every drone that should run the emulated firmware:
+Try the ready-made example before using your own world:
 
-1. Use the `Crazyflie` robot. Any robot with the same devices also works: `gps`, `gyro`
-   and `m1_motor`…`m4_motor` (plus `inertial_unit`, which is used if present).
-2. Give it a **unique `name`**, for example `cf1`.
-3. Set `controller` to **`"<extern>"`**.
-4. Set `supervisor` to **`TRUE`**. The bridge needs it to lift the drone off the floor at
-   take-off.
-
-Drones with a normal Webots controller are left alone, so emulated and regular drones can
-share a world. Two ready-made worlds are in `examples/worlds/` (`one_drone.wbt`,
-`two_drones.wbt`).
-
-## Fly
-
-1. Open your world in Webots and press **▶**. The drones are only visible to `dfm` while
-   the simulation is running.
-2. Run:
+1. In Webots, choose **File → Open World…** and open `examples/worlds/one_drone.wbt`
+   inside the folder you cloned, for example
+   `~/drone_firm_monitoring/examples/worlds/one_drone.wbt`.
+2. Press **▶**. The drones are only visible to `dfm` while the simulation is running.
+3. In a terminal, run:
 
    ```bash
    dfm up
@@ -71,12 +64,18 @@ share a world. Two ready-made worlds are in `examples/worlds/` (`one_drone.wbt`,
 
 `dfm` finds every drone waiting for an external controller and starts a Renode container,
 a bridge and a telemetry ingester for each one. A status table shows what each drone is
-doing:
+doing. On our test machine (6 cores) this is what happens:
 
-- The firmware takes **2–4 minutes** to boot and calibrate in emulation.
-- Arming takes about one more minute. Then the drones take off and hold altitude.
+- **For about 2½ minutes** the firmware boots and calibrates. Meanwhile the Webots clock
+  stands still (`0.00x`): this is on purpose, Webots has not frozen.
+- About 20 s later the drone takes off. **The take-off overshoots**: the drone bounces
+  and can climb above 10 m, then settles at about 0.6 m, usually within 1–3 minutes. See
+  [Known limitations](#known-limitations).
 - When the first drone finishes its flight (`--duration`, 300 s by default), all of them
   stop. Press `Ctrl+C` to stop earlier.
+
+If Webots asks whether to save the example world, answer **No**, so the example stays as
+it is. `examples/worlds/two_drones.wbt` does the same with two drones.
 
 Each run is saved in `runs/<date-time>/`: one telemetry file (`.jsonl`) and logs per drone,
 plus the configuration and versions used.
@@ -87,11 +86,33 @@ Open <http://localhost:3000> (user `admin`, password `admin`) and the dashboard
 **Crazyflie · Webots↔Renode bridge**. Use the **Drone** selector to show one, several or
 all drones.
 
+Flights of drones with the same name are drawn on the same line. To look at one flight
+only, choose its time range in the top right corner, or drag across a chart to zoom in.
+
+## Connect your own world
+
+Keep your worlds **outside** the `drone_firm_monitoring` folder, so that updating or
+removing `dfm` never touches them.
+
+In Webots, for every drone that should run the emulated firmware:
+
+1. Use the `Crazyflie` robot, either the one in the Webots library (**Add → PROTO nodes
+   (Webots Projects) → robots → bitcraze → crazyflie → Crazyflie**) or the one in
+   `examples/protos/`. Any robot with the same devices also works: `gps`, `gyro` and
+   `m1_motor`…`m4_motor` (plus `inertial_unit`, which is used if present).
+2. Give it a **unique `name`**, for example `cf1`.
+3. Set `controller` to **`"<extern>"`**.
+4. Set `supervisor` to **`TRUE`**. The bridge needs it to lift the drone off the floor at
+   take-off.
+
+Save the world, press **▶** and run `dfm up`, as in the first flight. Drones with a normal
+Webots controller are left alone, so emulated and regular drones can share a world.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `dfm setup` | Checks requirements, downloads the images, starts InfluxDB/Grafana and puts `dfm` on your `PATH`. Run it once. |
+| `dfm setup` | Checks requirements, downloads the images, starts InfluxDB/Grafana and creates the `dfm` command in `~/.local/bin`. Run it once. |
 | `dfm check` | Tests the installation without Webots: the firmware boots, calibrates, arms and drives the motors, and Grafana answers. Use `--quick` to only check that Renode starts. |
 | `dfm up` | Connects to the running Webots and flies every external drone. Options: `--duration <s>`, `--port <port>` (if several Webots are open), `--no-monitoring`. |
 | `dfm status` | Shows which Webots and drones `dfm` sees, and what is still running. |
@@ -131,8 +152,8 @@ The main settings:
   works in simulated time, but how much firmware time passes on each control cycle still
   depends on how fast the machine is (6–28 ms of firmware time for 256 ms of physics on
   our test machine). The firmware then answers the setpoint one or more cycles late, so
-  take-off can overshoot by several metres before the drone settles at its altitude. A
-  lockstep mode is being designed.
+  take-off overshoots by several metres (above 10 m in some of our flights) before the
+  drone settles at its altitude. A lockstep mode is being designed.
 - With the default gains the drone settles about 0.1 m above the target (0.60 m for
   0.5 m): the integrator reaches its limit before it can remove the error.
 - Emulation is functionally faithful (memory, peripherals, boot, arming), not

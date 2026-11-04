@@ -43,7 +43,8 @@ In `monitoring/` (compared with `drone-monitoring@e8dcd06`):
 - `tests/test_bridge_to_influx.py`: the example log is read from `tests/data/`.
 - `grafana/build_dashboard.py`: **Drone** selector (`drone` tag), one line per drone in
   every chart and one value per drone in the summary; points without the tag show up as
-  `(untagged)`. The **Session** selector was removed.
+  `(untagged)`. The **Session** selector was removed. Time-series panels that used three
+  fixed decimals now use automatic ones, so an axis reads `12.5 m` instead of `12.500 m`.
 
 ## Not copied
 

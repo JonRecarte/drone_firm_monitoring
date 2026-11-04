@@ -173,21 +173,21 @@ row("Flight")
 timeseries("Altitude and target",
            "Plant altitude (Webots GPS) and the alt_target set in session_start.",
            [("alt", "Altitude", C[0], "solid"), ("alt_target", "Target", MUTED, "dash")],
-           "suffix: m", 0, 12, decimals=3)
+           "suffix: m", 0, 12)
 timeseries("Altitude error",
            "alt − target. A steady error points to a HOVER_THRUST bias or to the integrator of the bridge's PD+I being saturated.",
-           [("alt_error", "Altitude error", C[0], "solid")], "suffix: m", 12, 12, decimals=3, threshold_line=0)
+           [("alt_error", "Altitude error", C[0], "solid")], "suffix: m", 12, 12, threshold_line=0)
 y += 8
 timeseries("Vertical speed",
            "Bridge vz: the Δalt/Δt its PD+I uses, in simulated time with Webots (wall time with FakePlant). Physical vz: Δalt/Δsim, computed by the ingester from the logged samples. With Webots both should match; a gap means the controller and the log see different clocks.",
            [("vz", "Bridge vz", C[0], "solid"), ("vz_sim", "Physical vz (simulated time)", C[1], "solid")],
-           "velocityms", 0, 8, decimals=3)
+           "velocityms", 0, 8)
 timeseries("Commanded thrust",
            "Thrust of the RPYT setpoint the bridge writes into the firmware (Crazyflie scale 0–65535).",
            [("thrust", "Thrust", C[0], "solid")], "none", 8, 8, decimals=0)
 timeseries("Altitude controller output (u)",
            "Dimensionless output of the bridge's altitude PD+I: thrust = HOVER_THRUST + u·14000.",
-           [("u", "u", C[0], "solid")], "none", 16, 8, decimals=3)
+           [("u", "u", C[0], "solid")], "none", 16, 8)
 y += 8
 
 # ---------------------------------------------------------------- Actuators
@@ -212,7 +212,7 @@ row("Sensors · plant → firmware")
 timeseries("Gyroscope",
            "Angular rate sent to the emulated BMI088, in degrees/s, after the bridge's low-pass filter.",
            [("gyro_x", "x", C[0], "solid"), ("gyro_y", "y", C[1], "solid"), ("gyro_z", "z", C[2], "solid")],
-           "none", 0, 8, decimals=3)
+           "none", 0, 8)
 timeseries("Accelerometer",
            "Proper acceleration sent to the BMI088, in mg (1000 = 1 g). The PROTO has no accelerometer: the bridge derives it from the GPS and sends exactly (0, 0, 1000) when the drone is almost still.",
            [("accel_x", "x", C[0], "solid"), ("accel_y", "y", C[1], "solid"), ("accel_z", "z", C[2], "solid")],
@@ -229,10 +229,10 @@ timeseries("Bridge loop rate",
            [("loop_hz", "Rate", C[0], "solid")], "suffix: Hz", 0, 8, decimals=2)
 timeseries("Simulation speed",
            "Δsim/Δwall between cycles. The grey line marks 1 (real time). Computed by the ingester; it does not include Renode's virtual time.",
-           [("sim_speed", "Δsim/Δwall", C[0], "solid")], "none", 8, 8, decimals=3, threshold_line=1)
+           [("sim_speed", "Δsim/Δwall", C[0], "solid")], "none", 8, 8, threshold_line=1)
 timeseries("Simulation advance per cycle",
            "Simulated Webots seconds between cycles. The bridge's catch-up limits the advance to ~0.25 s per cycle.",
-           [("dt_sim", "Δsim per cycle", C[0], "solid")], "s", 16, 8, decimals=3)
+           [("dt_sim", "Δsim per cycle", C[0], "solid")], "s", 16, 8)
 y += 8
 
 # ---------------------------------------------------------------- Events

@@ -327,9 +327,14 @@ def bridge_state(d: Drone) -> tuple[str, bool]:
     return "starting", False
 
 
+_table_rows = 0  # terminal rows taken by the last table, to redraw it in place
+
+
 def print_table(drones: list[Drone], webots_port: int, grafana: bool, started: float) -> None:
+    global _table_rows
+    count = f"{len(drones)} drone" + ("" if len(drones) == 1 else "s")
     lines = [
-        f"dfm · Webots (port {webots_port}) · {len(drones)} drones · {time.time() - started:5.0f} s   (Ctrl+C to stop)",
+        f"dfm · Webots (port {webots_port}) · {count} · {time.time() - started:5.0f} s   (Ctrl+C to stop)",
         "",
         f"  {'drone':<12} {'renode':<10} bridge",
     ]
@@ -343,7 +348,11 @@ def print_table(drones: list[Drone], webots_port: int, grafana: bool, started: f
     if grafana:
         lines += ["", "  Grafana: http://localhost:3000"]
     if sys.stdout.isatty():
-        print("\x1b[H\x1b[J" + "\n".join(lines), flush=True)
+        # Move back over the previous table and clear it, so earlier output stays visible above.
+        back = f"\x1b[{_table_rows}F\x1b[J" if _table_rows else ""
+        print(back + "\n".join(lines), flush=True)
+        cols = shutil.get_terminal_size().columns
+        _table_rows = sum(max(1, -(-len(line) // cols)) for line in lines)
     else:
         print("\n".join(lines) + "\n", flush=True)
 
@@ -573,20 +582,23 @@ def compose_images() -> list[str]:
     return re.findall(r"^\s*image:\s*(\S+)", text, re.M)
 
 
-def link_command() -> None:
-    """Makes `dfm` available from any folder (link in ~/.local/bin)."""
+def link_command() -> bool:
+    """Makes `dfm` available from any folder (link in ~/.local/bin). True if `dfm` now works."""
     BIN.mkdir(parents=True, exist_ok=True)
     link, target = BIN / "dfm", Path(__file__).resolve()
     if link.is_symlink() or link.exists():
         if link.resolve() != target:
             print(f"  ! {link} already exists and is not this dfm: leaving it alone")
-            return
+            return False
         link.unlink()
     link.symlink_to(target)
     print(f"  ✓ {link} → {target}")
     if str(BIN) not in os.environ.get("PATH", "").split(os.pathsep):
         print(f"  ! {BIN} is not on your PATH. Add this line to ~/.bashrc and open a new terminal:")
         print('      export PATH="$HOME/.local/bin:$PATH"')
+        print("    Until then, use ./dfm from this folder.")
+        return False
+    return True
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
@@ -616,9 +628,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("  ✓ InfluxDB and Grafana running · Grafana: http://localhost:3000 (admin / admin)")
     RUNS.mkdir(exist_ok=True)
     print("\nCommand:")
-    link_command()
-    print("\nDone. Next: dfm check  (tests everything without Webots; takes a few minutes)")
-    print("To fly: open your world in Webots, press ▶ and run dfm up")
+    command = "dfm" if link_command() else "./dfm"
+    print(f"\nDone. Next: {command} check  (tests everything without Webots; takes a few minutes)")
+    print(f"To fly: open a world in Webots (e.g. examples/worlds/one_drone.wbt), press ▶ and run {command} up")
     return 0
 
 
@@ -714,7 +726,8 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     delete = args.delete_data
     if not delete and not args.dry_run and sys.stdin.isatty():
         delete = input("Also delete the data (flights in InfluxDB/Grafana and the runs/ folder)? [y/N] ").strip().lower() in ("y", "yes")
-    images = [cfg["renode"]["image"], *compose_images()]
+    # The configured image and the published one, in case config.toml points elsewhere.
+    images = list(dict.fromkeys([cfg["renode"]["image"], IMAGE, *compose_images()]))
     link = BIN / "dfm"
     ours = link.is_symlink() and link.resolve() == Path(__file__).resolve()
     if args.dry_run:

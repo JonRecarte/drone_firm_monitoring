@@ -90,6 +90,13 @@ class WebotsPlant:
     # Official hover ω ≈ 55 rad/s. Map FW ratio 0.55 (≈36k thrust) → ~55.
     MOTOR_OMEGA_SCALE = 100.0  # rad/s at ratio=1.0
 
+    # In this model, speeding up m1 and m3 yaws the drone positively (+606 °/s after 0.3 s,
+    # measured on 5 Nov 2026), and the firmware answers a positive yaw rate precisely by
+    # speeding up m1 and m3, so its correction fed the spin. Roll and pitch have the right sign.
+    # The firmware therefore gets the yaw rate with its sign flipped (and the bridge flips the
+    # yaw-rate setpoint too): for the firmware the world is mirrored in yaw only.
+    YAW_SIGN_TO_FW = -1.0
+
     def __init__(
         self,
         robot,
@@ -212,6 +219,7 @@ class WebotsPlant:
             gyro = rad_s_to_bmi_gyro_units(Vec3(w[0], w[1], w[2]))
             gyro = self.axis_map.apply(gyro)
             gyro = self._gyro_lpf.update(gyro, dt if dt > 0 else self.timestep_s)
+            gyro = Vec3(gyro.x, gyro.y, self.YAW_SIGN_TO_FW * gyro.z)
         else:
             gyro = Vec3(0.0, 0.0, 0.0)
 
@@ -298,6 +306,16 @@ class WebotsPlant:
             if last == -1:
                 break
         return last
+
+    def motor_max_torques(self) -> list[float]:
+        """maxTorque of each propeller motor (it limits how fast the rotors change speed)."""
+        out = []
+        for m in self._motors:
+            try:
+                out.append(float(m.getMaxTorque()))
+            except Exception:
+                pass
+        return out
 
     def motor_velocities(self) -> tuple[float, float, float, float]:
         out = []

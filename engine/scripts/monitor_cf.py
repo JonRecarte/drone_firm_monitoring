@@ -5,8 +5,10 @@
 # A host thread calling Feed*/TriggerDataInterrupt races Renode and can CPU-abort.
 
 from Antmicro.Renode.Core import EmulationManager
-from Antmicro.Renode.Time import ClockEntry
-from System import Action
+from Antmicro.Renode.Time import ClockEntry, TimeInterval
+from System import Action, Boolean, UInt64
+from System.Diagnostics import Stopwatch
+from System.Reflection import BindingFlags
 import time
 
 _last_ins = None
@@ -23,6 +25,10 @@ _stream_virt0 = 0.0
 # Mutable sample updated by imu_stream_set without restarting the clock.
 # [gx, gy, gz, ax, ay, az, pressure, temp]
 _stream_sample = [0.0, 0.0, 0.0, 0.0, 0.0, 1000.0, 101325.0, 25.0]
+# Host time spent inside the IMU stream callback (Stopwatch ticks) and number of calls,
+# reset by every lockstep_step so each step reports its own.
+_cb_ticks = 0
+_cb_calls = 0
 
 
 def mc_cpu_stats():
@@ -207,19 +213,33 @@ def mc_imu_stream_start(hz, gx, gy, gz, ax, ay, az, baro_hz=0, pressure=101325, 
     _stream_sample[6] = float(pressure)
     _stream_sample[7] = float(temp)
 
+    # Keep at most one sample in each sensor queue, so the firmware always reads the latest
+    # one. Without this, samples fed while the firmware boots pile up (2861 at 250 Hz, i.e.
+    # 11.4 s of delay, measured on 4 Nov 2026) and the barometer queue grows without bound.
+    (gyro_fifo,) = _sensor_fifos(gyro, "fifo")
+    (accel_fifo,) = _sensor_fifos(accel, "fifo")
+    baro_fifos = _sensor_fifos(baro, "fifoP", "fifoT") if baro is not None else []
+
     def on_tick():
-        global _stream_n
+        global _stream_n, _cb_ticks, _cb_calls
+        t0 = Stopwatch.GetTimestamp()
         try:
             s = _stream_sample
+            _drain(gyro_fifo)
             gyro.FeedGyroSample(s[0], s[1], s[2], 1)
+            _drain(accel_fifo)
             accel.FeedAccSample(s[3], s[4], s[5], 1)
             gyro.TriggerDataInterrupt()
             n = _stream_n
             if baro is not None and baro_every > 0 and (n % baro_every) == 0:
+                for f in baro_fifos:
+                    _drain(f)
                 baro.FeedPTSample(s[6], s[7], 1)
             _stream_n = n + 1
         except Exception:
             pass
+        _cb_ticks += Stopwatch.GetTimestamp() - t0
+        _cb_calls += 1
 
     handler = Action(on_tick)
     # period=1 tick at `rate` Hz virtual time (same pattern as SimpleTicker)
@@ -694,3 +714,114 @@ def mc_setpoint_stats():
         "thrust=%.0f roll=%.2f pitch=%.2f yaw_rate=%.2f z=%.3f "
         "mode=xy%d%d z%d rpy%d%d%d prio=%d ts=%d tick=%d age=%d"
     ) % (thr, roll, pitch, yaw_rate, z, mx, my, mz, mr, mp, myaw, prio, ts, tick, age)
+
+
+# --- Lockstep: the bridge advances the firmware by exactly the simulated time of each step ---
+
+def mc_quantum(us=None):
+    """Get or set the emulation's time quantum in microseconds (Renode's default is 100).
+    A larger quantum synchronises Renode's threads less often: 10 ms ran the firmware about
+    1.4x faster with the same behaviour (measured on 4 Nov 2026)."""
+    master = EmulationManager.Instance.CurrentEmulation.MasterTimeSource
+    if us is not None:
+        master.Quantum = TimeInterval.FromTicks(UInt64(long(us)))
+    print "quantum_us=%d" % master.Quantum.Ticks
+
+
+def mc_lockstep_step(roll, pitch, yaw_rate, thrust, gx, gy, gz, ax, ay, az, pressure, dt_us):
+    """One lockstep step in a single monitor call: sets the sensor sample of the running IMU
+    stream and an RPYT setpoint, runs exactly dt_us of virtual time (the emulation must be
+    paused) and prints motor_ratios with the virtual time reached, plus the host time it
+    took: pre_ms (sample and setpoint), run_ms (RunFor), cb_ms/cb_n (IMU callbacks inside it)."""
+    global _cb_ticks, _cb_calls
+    t0 = Stopwatch.GetTimestamp()
+    machine = _require_machine()
+    if machine is None:
+        return
+    emulation = EmulationManager.Instance.CurrentEmulation
+    if emulation.IsStarted:
+        print "error=emulation is running (pause it first)"
+        return
+    if _stream_handler is None:
+        print "error=stream not running (imu_stream_start first)"
+        return
+    for i, v in enumerate((gx, gy, gz, ax, ay, az, pressure)):
+        _stream_sample[i] = float(v)
+    bus = machine.SystemBus
+    tick = long(bus.ReadDoubleWord(_XTICK_COUNT_ADDR))
+    for base in (_SETPOINT_QUEUE_STORAGE, _STABILIZER_SETPOINT):
+        _pack_rpyt_setpoint(bus, base, float(roll), float(pitch), float(yaw_rate), float(thrust), tick)
+    bus.WriteDoubleWord(_PRIORITY_QUEUE_STORAGE, _COMMANDER_PRIORITY_CRTP)
+    _cb_ticks = 0
+    _cb_calls = 0
+    t1 = Stopwatch.GetTimestamp()
+    emulation.RunFor(TimeInterval.FromTicks(UInt64(long(dt_us))))
+    t2 = Stopwatch.GetTimestamp()
+    r = [_read_u16(bus, _MOTOR_RATIOS_ADDR + 2 * i) for i in range(4)]
+    ms = Stopwatch.Frequency / 1000.0
+    print "m1=%d m2=%d m3=%d m4=%d virt=%.6f tick=%d pre_ms=%.3f run_ms=%.3f cb_ms=%.3f cb_n=%d" % (
+        r[0], r[1], r[2], r[3],
+        emulation.MasterTimeSource.ElapsedVirtualTime.TotalSeconds,
+        long(bus.ReadDoubleWord(_XTICK_COUNT_ADDR)),
+        (t1 - t0) / ms, (t2 - t1) / ms, _cb_ticks / ms, _cb_calls)
+
+
+# --- Sensor sample queues ---------------------------------------------------------------
+# Renode's BMI088 gyro/accel and BMP388 models keep fed samples in a FIFO (SensorSamplesFifo)
+# and the firmware takes one per read. Samples fed before the firmware starts reading pile up,
+# and from then on it reads them with that fixed delay. The queues are private fields.
+
+def _sensor_fifos(sensor, *names):
+    t = sensor.GetType()
+    flags = BindingFlags.NonPublic | BindingFlags.Instance
+    return [t.GetField(n, flags).GetValue(sensor) for n in names]
+
+
+def _drain(fifo):
+    """Drop every queued sample; the sensor then reports the last one until a new one arrives."""
+    while fifo.SamplesCount > 0:
+        fifo.TryDequeueNewSample()
+
+
+def mc_imu_backlog():
+    """Samples waiting in the gyro, accelerometer and barometer queues."""
+    machine = _require_machine()
+    if machine is None:
+        return
+    (g,) = _sensor_fifos(machine["sysbus.i2c3.bmi_gyro"], "fifo")
+    (a,) = _sensor_fifos(machine["sysbus.i2c3.bmi_accel"], "fifo")
+    p, t = _sensor_fifos(machine["sysbus.i2c3.bmp_baro"], "fifoP", "fifoT")
+    print "gyro=%d accel=%d baro_p=%d baro_t=%d" % (g.SamplesCount, a.SamplesCount, p.SamplesCount, t.SamplesCount)
+
+
+# --- I2C interrupt line (experimental) ----------------------------------------------------
+# Renode's STM32F4_I2C (renode-infrastructure c9c51b2d) applies a change of ITBUFEN/ITEVTEN
+# (CR2 bits 10/9) only at the nearest synced state. Until then the event interrupt stays
+# asserted: when the firmware disables ITBUFEN after TXE (i2c_drv.c, reading a sensor register)
+# the ISR runs again and again, ~630 times per ms of firmware (measured 9 Nov 2026 with
+# Renode's profiler). On the real STM32 the line drops as soon as the bit is cleared.
+# This replaces the change callback of both bits with one that updates the line at once.
+
+def mc_i2c_fast_irq():
+    machine = _require_machine()
+    if machine is None:
+        return
+    i2c = machine["sysbus.i2c3"]
+    flags = BindingFlags.NonPublic | BindingFlags.Instance
+    update = i2c.GetType().GetMethod("Update", flags)
+    def immediate(old_value, new_value):
+        update.Invoke(i2c, None)
+    patched = []
+    for name in ("bufferInterruptEnable", "eventInterruptEnable"):
+        field = i2c.GetType().GetField(name, flags).GetValue(i2c)
+        t = field.GetType()
+        info = None
+        while t is not None and info is None:
+            info = t.GetField("changeCallback", flags)
+            t = t.BaseType
+        if info is None:
+            print "error=changeCallback not found for %s" % name
+            return
+        info.SetValue(field, Action[Boolean, Boolean](immediate))
+        patched.append(name)
+    print "i2c_fast_irq=on fields=%s" % ",".join(patched)

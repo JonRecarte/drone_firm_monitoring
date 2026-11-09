@@ -11,7 +11,7 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 
 WorldInfo {
   title "CF Renode ↔ Webots"
-  basicTimeStep 8
+  basicTimeStep 2
   info [
     "Official Crazyflie PROTO; motors driven by Renode cf2.elf via host bridge."
   ]

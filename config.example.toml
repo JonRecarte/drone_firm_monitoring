@@ -15,13 +15,19 @@ base_port = 10000
 
 [bridge]
 mode = "closed-loop"
+# lockstep: on every step Webots and each firmware advance by exactly the same simulated
+# time, so a flight gives the same result on any machine (slower than real time).
+# clock: Webots follows the wall clock and Renode runs free (faster, but the firmware lags).
+sync = "lockstep"
+step_ms = 0               # lockstep step in ms; 0 = the world's basicTimeStep (use 2 ms)
 alt_target = 0.5          # m
 thrust = 30500
 hover_thrust = 31000
-imu_hz = 80
-loop_hz = 12
-duration_s = 300          # flight seconds for each bridge
-gate_timeout_s = 600      # how long to wait for the firmware to boot (minutes in Renode)
+imu_hz = 1000             # as the real Crazyflie; keep it above 1/step
+gyro_lpf_tau_s = 0.0      # bridge-side gyro low-pass in s (0 = off; the firmware filters it)
+loop_hz = 12              # clock mode only
+duration_s = 30           # simulated seconds in lockstep, wall seconds in clock mode
+gate_timeout_s = 900      # how long to wait for the firmware to boot (minutes in Renode)
 # Altitude controller (PD+I in simulated time; see "Known limitations" in README.md):
 # alt_kp = 0.40
 # alt_kd = 0.341

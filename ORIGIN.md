@@ -34,6 +34,38 @@ In `engine/` (compared with `CF_renode_emulator@fdb018b`):
 - `bridge/webots_io.py`: `unstick_for_takeoff` keeps the drone's own `x, y`. It used to move
   it to `(0, 0)`, which piled up several drones in the same spot.
 
+Since version 0.2 (lockstep):
+
+- **Sensor values reach the firmware.** The bridge used to send them with Python's default
+  formatting, which writes small values in scientific notation (`-1.2e-18`). Renode's
+  monitor splits that into two arguments, the command fails, and the bridge ignored the
+  reply, so the firmware only ever saw the resting sample from boot. All numbers now go
+  with fixed decimals (`bridge/renode_io.py`).
+- **Lockstep** (`--sync lockstep`, the default in `dfm`): on every step Webots advances one
+  physics step with the current motors, and one monitor command (`lockstep_step` in
+  `scripts/monitor_cf.py`) sets the sensor sample and the setpoint, runs exactly that much
+  firmware time with `Emulation.RunFor`, and returns the motors. No take-off teleport in
+  this mode. The original free-running mode remains as `--sync clock`.
+- **Sensor queues.** Renode's BMI088 and BMP388 models queue every sample; during boot the
+  queue reached 11.4 s of delay. Each new sample now replaces the queued ones.
+- **Gyro offset.** The firmware's gyro self-test fails on exactly (0, 0, 0), so every gyro
+  sample carries a small constant offset, like a real BMI088; the firmware calibrates it.
+- **Yaw sign.** The Webots model and the firmware disagree on the sign of yaw (roll and
+  pitch agree); the bridge mirrors the yaw rate and the yaw setpoint.
+- **Monitor client** (`scripts/renode_monitor.py`): an optional fast mode that returns at
+  the prompt (used in lockstep), and each query no longer re-reads the whole session.
+- **Renode configuration** (`scripts/renode.config`, mounted by `dfm`): the monitor history
+  goes to `/dev/null`, because Renode rewrote the whole history file after every command.
+- **Timing fields** in the telemetry (`t_*_ms`, `rn_*`): where the time of each step goes.
+- **World checks**: in lockstep the bridge warns if the physics step is above 4 ms or the
+  propeller motors are too slow (`maxTorque` below 100).
+- `image/entrypoint.py` is mounted by `dfm` from the repo; with `DFM_START_PAUSED=1` it
+  does not start the machine, so in lockstep the firmware only runs when the bridge
+  advances it.
+- `examples/protos/Crazyflie.proto`: `torqueConstants` 2.4e-06 → 2.386e-07 (the real yaw
+  torque per thrust, from CrazyS / Förster 2015) and `maxTorque` 30 → 300 (rotors respond
+  in ~24 ms instead of ~200 ms). The example worlds use `basicTimeStep 2`.
+
 In `monitoring/` (compared with `drone-monitoring@e8dcd06`):
 
 - Everything translated to English: messages and help of `bridge_to_influx.py` (the

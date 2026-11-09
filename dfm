@@ -49,7 +49,7 @@ RUNS = REPO / "runs"
 LABEL = "dfm"
 # Version of this repo. The image with the same version is published on Docker Hub by
 # .github/workflows/image.yml when the tag v<VERSION> is pushed.
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 IMAGE = f"jonrecartenaitec/drone_firm_monitoring:{VERSION}"
 
 # Defaults; config.toml (or config.example.toml) overrides them.
@@ -57,13 +57,18 @@ DEFAULTS: dict = {
     "renode": {"image": IMAGE, "base_port": 10000},
     "bridge": {
         "mode": "closed-loop",
+        # lockstep: Webots and each firmware advance by exactly the same simulated time on every
+        # step (reproducible, slower). clock: Webots follows the wall clock and Renode runs free.
+        "sync": "lockstep",
+        "step_ms": 0,             # lockstep step; 0 = the world's basicTimeStep
         "alt_target": 0.5,
         "thrust": 30500,
         "hover_thrust": 31000,
-        "imu_hz": 80,
-        "loop_hz": 12,
-        "duration_s": 300,
-        "gate_timeout_s": 600,
+        "imu_hz": 1000,           # the real Crazyflie reads its IMU at 1 kHz (SENSORS_READ_RATE_HZ)
+        "gyro_lpf_tau_s": 0.0,    # bridge-side low-pass on the gyro (0 = off; the firmware filters)
+        "loop_hz": 12,            # clock mode only
+        "duration_s": 30,         # simulated seconds in lockstep, wall seconds in clock mode
+        "gate_timeout_s": 900,
         # Altitude PD+I, in simulated time (see engine/bridge/webots_renode_bridge.py).
         "alt_kp": 0.40, "alt_kd": 0.341, "alt_ki": 0.129, "alt_i_limit": 0.31, "alt_vz_limit": 8.06,
     },
@@ -202,29 +207,44 @@ def image_labels(image: str) -> dict:
     return json.loads(res.stdout) or {}
 
 
-def start_renode(drone: str, port: int, image: str, run_id: str) -> str:
-    """The image entrypoint (image/entrypoint.py) prepares firmware, profile and monitor.py."""
+def repo_mounts() -> list[str]:
+    """Files the containers take from the repo, so they always match its bridge: the entrypoint
+    (image/entrypoint.py, which writes the .resc and starts Renode) and the monitor commands."""
+    return ["-v", f"{REPO / 'image' / 'entrypoint.py'}:/usr/local/bin/dfm-renode:ro",
+            "-v", f"{ENGINE / 'scripts' / 'monitor_cf.py'}:/dfm/monitor_cf.py:ro"]
+
+
+def start_renode(drone: str, port: int, image: str, run_id: str, paused: bool = False) -> str:
+    """The entrypoint prepares firmware, profile and monitor.py. paused (lockstep): the machine
+    is not started, so the firmware only runs when the bridge advances it and every flight
+    starts from the same state."""
     name = container_name(drone)
     docker("rm", "-f", name, check=False)
     docker(
         "run", "-d", "--name", name,
         "--label", f"{LABEL}=1", "--label", f"{LABEL}.run={run_id}", "--label", f"{LABEL}.drone={drone}",
         "-p", f"127.0.0.1:{port}:9999",
-        # Monitor commands come from the repo, so they always match its bridge.
-        "-v", f"{ENGINE / 'scripts' / 'monitor_cf.py'}:/dfm/monitor_cf.py:ro",
+        *(["-e", "DFM_START_PAUSED=1"] if paused else []),
+        *repo_mounts(),
+        # Renode's default config, but with the monitor history going to /dev/null: Renode
+        # rewrites the whole history file after every command, so each lockstep step got a
+        # little slower than the previous one (measured 6 Nov 2026).
+        "-v", f"{ENGINE / 'scripts' / 'renode.config'}:/root/.config/renode/config:ro",
         image,
     )
     return name
 
 
 def wait_machine_started(names: list[str], timeout: float = 120.0) -> None:
-    """Waits for "Machine started" in the logs. The monitor port is not probed: Renode
-    accepts a single client and shuts down when that client disconnects."""
+    """Waits until Renode has loaded the machine: "Machine started", or, when it starts paused,
+    the GDB server line that the .resc prints after loading the firmware. The monitor port is
+    not probed: Renode accepts a single client and shuts down when that client disconnects."""
     pending, end = set(names), time.time() + timeout
     while pending and time.time() < end:
         for name in list(pending):
             res = docker("logs", name, check=False)
-            if "Machine started" in res.stdout + res.stderr:
+            out = res.stdout + res.stderr
+            if "Machine started" in out or "GDB server with all CPUs started" in out:
                 pending.discard(name)
             elif not container_running(name):
                 raise RuntimeError(f"container {name} stopped while starting")
@@ -253,8 +273,9 @@ def bridge_args(cfg: dict, d: Drone) -> list[str]:
     return [
         sys.executable, "-u", "-m", "bridge.webots_renode_bridge",
         "--mode", str(b["mode"]), "--wait-preflight", "--gate-timeout", str(b["gate_timeout_s"]),
+        "--sync", str(b["sync"]), "--step-ms", str(b["step_ms"]),
         "--imu-hz", str(b["imu_hz"]), "--loop-hz", str(b["loop_hz"]), "--seconds", str(b["duration_s"]),
-        "--status-every", "2", "--port", str(d.renode_port), "--gyro-sign", "1,1,1", "--gyro-lpf-tau", "0.02",
+        "--status-every", "2", "--port", str(d.renode_port), "--gyro-sign", "1,1,1", "--gyro-lpf-tau", str(b["gyro_lpf_tau_s"]),
         "--telemetry", str(d.jsonl),
         "--thrust", str(b["thrust"]), "--hover-thrust", str(b["hover_thrust"]),
         "--roll", "0", "--pitch", "0", "--yaw-rate", "0", "--alt-target", str(b["alt_target"]),
@@ -342,6 +363,17 @@ def print_table(drones: list[Drone], webots_port: int, grafana: bool, started: f
         renode = "running" if container_running(d.container) else "STOPPED"
         state, _ = bridge_state(d)
         lines.append(f"  {d.name:<12} {renode:<10} {state}")
+    warnings = []
+    for d in drones:
+        try:
+            text = d.bridge_log.read_text(errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith("WARNING (world): ") and line[17:] not in warnings:
+                warnings.append(line[17:])
+    if warnings:
+        lines += [""] + [f"  ⚠ Your world: {w}" for w in warnings]
     idle = time.time() - max((d.bridge_log.stat().st_mtime for d in drones if d.bridge_log.exists()), default=time.time())
     if idle > 60:
         lines += ["", f"  ⚠ The simulation has not advanced for {idle:.0f} s: is Webots paused?"]
@@ -413,7 +445,8 @@ def cmd_up(args: argparse.Namespace) -> int:
     try:
         log(f"Starting {len(drones)} Renode containers…")
         for d in drones:
-            d.container = start_renode(d.name, d.renode_port, cfg["renode"]["image"], run_id)
+            d.container = start_renode(d.name, d.renode_port, cfg["renode"]["image"], run_id,
+                                       paused=cfg["bridge"]["sync"] == "lockstep")
         wait_machine_started([d.container for d in drones])
         if cfg["monitoring"]["enabled"]:
             compose = MONITORING / "docker-compose.yml"
@@ -662,7 +695,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     port, name = int(cfg["renode"]["base_port"]), "dfm-check"
     docker("rm", "-f", name, check=False)
     docker("run", "-d", "--name", name, "--label", f"{LABEL}=1", "-p", f"127.0.0.1:{port}:9999",
-           "-v", f"{ENGINE / 'scripts' / 'monitor_cf.py'}:/dfm/monitor_cf.py:ro", image)
+           *repo_mounts(), image)
     try:
         t0 = time.time()
         wait_machine_started([name])
@@ -765,7 +798,8 @@ def main(argv: list[str] | None = None) -> int:
     check.set_defaults(func=cmd_check)
     up = sub.add_parser("up", help="find the <extern> drones in your Webots and start everything")
     up.add_argument("--port", type=int, help="Webots port, if more than one Webots is open")
-    up.add_argument("--duration", type=float, help="flight seconds for each bridge (default: from the config)")
+    up.add_argument("--duration", type=float,
+                    help="flight length in simulated seconds (wall seconds with sync = clock; default: from the config)")
     up.add_argument("--no-monitoring", action="store_true", help="do not start InfluxDB/Grafana or the ingesters")
     up.set_defaults(func=cmd_up)
     sub.add_parser("status", help="which Webots and drones dfm sees, and what is still running").set_defaults(func=cmd_status)

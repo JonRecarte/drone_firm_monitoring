@@ -66,13 +66,14 @@ Try the ready-made example before using your own world:
 a bridge and a telemetry ingester for each one. A status table shows what each drone is
 doing. On our test machine (6 cores) this is what happens:
 
-- **For about 2½ minutes** the firmware boots and calibrates. Meanwhile the Webots clock
+- **For about 2 minutes** the firmware boots and calibrates. Meanwhile the Webots clock
   stands still (`0.00x`): this is on purpose, Webots has not frozen.
-- About 20 s later the drone takes off. **The take-off overshoots**: the drone bounces
-  and can climb above 10 m, then settles at about 0.6 m, usually within 1–3 minutes. See
-  [Known limitations](#known-limitations).
-- When the first drone finishes its flight (`--duration`, 300 s by default), all of them
-  stop. Press `Ctrl+C` to stop earlier.
+- Then the drone takes off, rises to about 0.8 m and settles at about 0.6 m some 6 s
+  later (simulated time). The firmware keeps it level.
+- **The emulation is slow**: Webots shows about `0.02x`, so the default flight of 30 s
+  (simulated) takes **about 20 minutes**. See [Known limitations](#known-limitations).
+- When the first drone finishes its flight (`--duration`), all of them stop. Press
+  `Ctrl+C` to stop earlier.
 
 If Webots asks whether to save the example world, answer **No**, so the example stays as
 it is. `examples/worlds/two_drones.wbt` does the same with two drones.
@@ -96,14 +97,18 @@ removing `dfm` never touches them.
 
 In Webots, for every drone that should run the emulated firmware:
 
-1. Use the `Crazyflie` robot, either the one in the Webots library (**Add → PROTO nodes
-   (Webots Projects) → robots → bitcraze → crazyflie → Crazyflie**) or the one in
-   `examples/protos/`. Any robot with the same devices also works: `gps`, `gyro` and
-   `m1_motor`…`m4_motor` (plus `inertial_unit`, which is used if present).
+1. Use the `Crazyflie` robot **from `examples/protos/`**: copy that folder (with
+   `meshes/`) into your project's `protos/` folder and add it with **Add → PROTO nodes
+   (Current Project) → Crazyflie**. Do not use the one in the Webots library: its rotors
+   react too slowly and its yaw torque is ten times too strong, so the firmware cannot
+   keep it level.
 2. Give it a **unique `name`**, for example `cf1`.
 3. Set `controller` to **`"<extern>"`**.
-4. Set `supervisor` to **`TRUE`**. The bridge needs it to lift the drone off the floor at
-   take-off.
+4. Set `supervisor` to **`TRUE`** (the bridge uses the supervisor API).
+
+In `WorldInfo`, set **`basicTimeStep` to `2`** (ms). The firmware runs its control loop
+every 1–2 ms, and with larger steps the drone starts to shake. If your world uses a larger
+step or the library Crazyflie, `dfm up` shows a warning under its table.
 
 Save the world, press **▶** and run `dfm up`, as in the first flight. Drones with a normal
 Webots controller are left alone, so emulated and regular drones can share a world.
@@ -138,26 +143,33 @@ The main settings:
   (`crazyflie-firmware` **2026.08**). Each drone gets its own container from the same
   image.
 - The **bridge** is a Webots external controller (`WEBOTS_CONTROLLER_URL=ipc://<port>/<name>`).
-  On every cycle it feeds the drone's gyro, accelerometer and barometer to the firmware,
-  writes a roll/pitch/yaw-rate/thrust setpoint into the firmware's memory, and applies the
-  four motor outputs to the propellers. The firmware stabilises attitude and mixes the
-  motors; the bridge holds altitude.
+  Webots and the firmware advance **in turns of one physics step** (lockstep): Webots
+  simulates 2 ms with the current motor outputs; the bridge passes the drone's gyro,
+  accelerometer and barometer, plus a roll/pitch/yaw-rate/thrust setpoint, to the
+  firmware; Renode runs exactly 2 ms of firmware; and the new motor outputs go back to the
+  propellers. The firmware stabilises attitude and mixes the motors; the bridge holds
+  altitude.
+- Each Renode starts paused and only runs when the bridge advances it, so the result does
+  not depend on how fast the machine is: the same world and settings give the same flight.
 - The firmware's memory addresses are read from its debug information when the image is
   built (`engine/scripts/firmware_profile.py`). A profile that does not match the exact
   binary is refused.
 
 ## Known limitations
 
-- Webots and Renode are not run in lockstep. The bridge's altitude controller already
-  works in simulated time, but how much firmware time passes on each control cycle still
-  depends on how fast the machine is (6–28 ms of firmware time for 256 ms of physics on
-  our test machine). The firmware then answers the setpoint one or more cycles late, so
-  take-off overshoots by several metres (above 10 m in some of our flights) before the
-  drone settles at its altitude. A lockstep mode is being designed.
-- With the default gains the drone settles about 0.1 m above the target (0.60 m for
-  0.5 m): the integrator reaches its limit before it can remove the error.
+- **Speed.** On our test machine the emulation runs at about 1/40 of real time (30 s of
+  flight take about 20 minutes). Most of that time is spent in Renode's model of the I2C
+  bus that the firmware uses to read its sensors: it raises hundreds of spurious
+  interrupts on every read. The firmware itself is unchanged. Drones run in parallel, one
+  container each.
+- **Drone model.** The Crazyflie in `examples/protos/` has the real yaw torque and faster
+  rotors, but its mass and inertia are still about twice those of the real Crazyflie.
+- **Altitude.** The bridge, not the firmware, holds the altitude. With the default gains
+  the drone settles about 0.1 m above the target (0.60 m for 0.5 m).
 - Emulation is functionally faithful (memory, peripherals, boot, arming), not
   cycle-accurate.
+- Version 0.1 (branch `original`) keeps the emulator as it was in CF_renode_emulator, as a
+  reference: there, the firmware never received the flight sensor data.
 
 ## Building the image yourself
 

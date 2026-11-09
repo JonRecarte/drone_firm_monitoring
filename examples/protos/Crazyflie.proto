@@ -4,6 +4,13 @@
 # documentation url: https://webots.cloud/run?url=https://github.com/cyberbotics/webots/blob/released/projects/robots/bitcraze/crazyflie/protos/Crazyflie.proto
 # keywords: robot/flying
 # The "Crazyflie" is a robot developed by "Bitcraze": https://bitcraze.io
+#
+# drone_firm_monitoring: two changes so that the real firmware can stabilise it (see ORIGIN.md).
+# - torqueConstants 2.4e-06 -> 2.386e-07: yaw torque per thrust of the real Crazyflie
+#   (0.00596 m, CrazyS / Förster 2015); the original gave ten times more yaw authority.
+# - maxTorque 30 -> 300: the rotors reach 63 % of a speed step in ~24 ms instead of ~200 ms
+#   (the real motors take 12.5-25 ms).
+# Mass and inertia are still those of the original model (about twice the real ones).
 
 PROTO Crazyflie [
   field SFVec3f    translation     0 0 0.015   # Is `Pose.translation`.
@@ -99,12 +106,12 @@ PROTO Crazyflie [
         shaftAxis 0 0 1
         centerOfThrust 0.031 -0.031 0.008
         thrustConstants -4e-05 0
-        torqueConstants 2.4e-06 0
+        torqueConstants 2.386e-07 0
         fastHelixThreshold 1000
         device RotationalMotor {
           name "m1_motor"
           maxVelocity 600
-          maxTorque 30
+          maxTorque 300
         }
         fastHelix Solid {
           translation 0.031 -0.031 0.008
@@ -148,12 +155,12 @@ PROTO Crazyflie [
         shaftAxis 0 0 1
         centerOfThrust -0.031 -0.031 0.008
         thrustConstants 4e-05 0
-        torqueConstants 2.4e-06 0
+        torqueConstants 2.386e-07 0
         fastHelixThreshold 1000
         device RotationalMotor {
           name "m2_motor"
           maxVelocity 600
-          maxTorque 30
+          maxTorque 300
         }
         fastHelix Solid {
           translation -0.031 -0.031 0.008
@@ -183,12 +190,12 @@ PROTO Crazyflie [
         shaftAxis 0 0 1
         centerOfThrust -0.031 0.031 0.008
         thrustConstants -4e-05 0
-        torqueConstants 2.4e-06 0
+        torqueConstants 2.386e-07 0
         fastHelixThreshold 1000
         device RotationalMotor {
           name "m3_motor"
           maxVelocity 600
-          maxTorque 30
+          maxTorque 300
         }
         fastHelix Solid {
           translation -0.031 0.031 0.008
@@ -218,12 +225,12 @@ PROTO Crazyflie [
         shaftAxis 0 0 1
         centerOfThrust 0.031 0.031 0.008
         thrustConstants 4e-05 0
-        torqueConstants 2.4e-06 0
+        torqueConstants 2.386e-07 0
         fastHelixThreshold 1000
         device RotationalMotor {
           name "m4_motor"
           maxVelocity 600
-          maxTorque 30
+          maxTorque 300
         }
         fastHelix Solid {
           translation 0.031 0.031 0.008

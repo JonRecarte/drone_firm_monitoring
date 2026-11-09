@@ -49,7 +49,7 @@ RUNS = REPO / "runs"
 LABEL = "dfm"
 # Version of this repo. The image with the same version is published on Docker Hub by
 # .github/workflows/image.yml when the tag v<VERSION> is pushed.
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 IMAGE = f"jonrecartenaitec/drone_firm_monitoring:{VERSION}"
 
 # Defaults; config.toml (or config.example.toml) overrides them.
@@ -726,7 +726,9 @@ def check_firmware(port: int, gate_timeout: float) -> bool:
 
     client = RenodeClient(port)
     try:
-        client.query("imu_stream_start 80 0 0 0 0 0 1000 50 101325 25")
+        # The firmware's gyro self-test fails on exactly (0, 0, 0), so the gyro carries the same
+        # small constant offset as in the bridge (GYRO_OFFSET_DPS in engine/bridge/renode_io.py).
+        client.query("imu_stream_start 80 0.500000 -0.400000 0.300000 0 0 1000 50 101325 25")
         t0, last, calib, pre = time.time(), 0.0, False, False
         while time.time() - t0 < gate_timeout and not pre:
             calib = "calibrated=1" in client.query("calib_status")

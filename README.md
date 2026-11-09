@@ -8,6 +8,14 @@ in Grafana. Works with any number of drones.
 You build the world in Webots as usual; `dfm` only adds the firmware emulation. It never
 opens or closes Webots.
 
+> **This is the original version (v0.1), kept as a reference.** It packages the emulator as
+> it was in [CF_renode_emulator](https://github.com/danielalaez/CF_renode_emulator): Webots
+> and Renode run on separate clocks, and the bridge controls the altitude. Known limitation:
+> the firmware never receives the flight sensor data (the bridge sends small values in
+> scientific notation, which Renode's monitor rejects), so its attitude controller does not
+> act; the hover works only because a vertical flight is symmetric. For a faithful emulation,
+> use the latest version (branch `main`).
+
 ```
               Webots (your world, N drones)
         ┌───────────┬───────────┬───────────┐
@@ -37,7 +45,7 @@ Each drone needs about one CPU core and 250 MB of RAM.
 ## Install
 
 ```bash
-git clone https://github.com/JonRecarte/drone_firm_monitoring.git
+git clone --branch original https://github.com/JonRecarte/drone_firm_monitoring.git
 cd drone_firm_monitoring
 ./dfm setup     # checks requirements, downloads the images, starts Grafana, creates the dfm command
 ./dfm check     # tests the installation without Webots (takes a few minutes)
